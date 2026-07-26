@@ -1,18 +1,14 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : "http://localhost:3000");
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: {
     default: "Command | Nexus OS",
     template: "%s | Nexus OS",
@@ -25,6 +21,28 @@ export const metadata: Metadata = {
     shortcut: "/nexus-emblem-96.png",
     apple: "/nexus-emblem-192.png",
   },
+  openGraph: {
+    type: "website",
+    siteName: "Nexus OS",
+    title: "Nexus OS",
+    description:
+      "A private personal command and calendar system for running today with clarity.",
+    images: [
+      {
+        url: "/nexus-calendar-social.png",
+        width: 1672,
+        height: 941,
+        alt: "Abstract Nexus OS calendar timeline",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Nexus OS",
+    description:
+      "A private personal command and calendar system for running today with clarity.",
+    images: ["/nexus-calendar-social.png"],
+  },
 };
 
 export default function RootLayout({
@@ -34,11 +52,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" data-theme="nexus">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

@@ -6,6 +6,8 @@ import type {
   TimelineItem,
   TimelineUpdate,
 } from "../lib/domain/types";
+import { ConflictError } from "../lib/domain/errors";
+import { ValidationError } from "../lib/domain/validation";
 import { localDateInZone, localTimeInZone } from "../lib/time/rules";
 import { database } from "./database";
 import type { NexusDatabase } from "./database-contract";
@@ -45,6 +47,7 @@ export type TimelineRow = {
   location: string;
   category: string | null;
   event_status: "confirmed" | "tentative" | "canceled";
+  event_metadata: string;
   recurrence_rule: string | null;
   source: "local" | "imported";
   source_id: string | null;
@@ -68,7 +71,7 @@ let initialization: Promise<void> | null = null;
 
 async function ensureColumns(
   db: NexusDatabase,
-  table: "priorities" | "timeline_items",
+  table: "priorities" | "timeline_items" | "time_preferences",
   columns: Record<string, string>,
 ) {
   const current = await db
@@ -215,6 +218,31 @@ export function ensureCommandSchema() {
         )
       `),
       db.prepare(`
+        CREATE TABLE IF NOT EXISTS reminder_instances (
+          id TEXT PRIMARY KEY NOT NULL,
+          reminder_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          occurrence_date TEXT NOT NULL,
+          occurrence_key TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          delivered_at TEXT,
+          seen_at TEXT,
+          snoozed_until TEXT,
+          resolved_at TEXT,
+          state TEXT NOT NULL DEFAULT 'scheduled'
+            CHECK (state IN (
+              'scheduled', 'delivered', 'seen', 'snoozed',
+              'resolved', 'dismissed', 'expired'
+            )),
+          reason TEXT NOT NULL,
+          rule_label TEXT NOT NULL,
+          escalation_level INTEGER NOT NULL DEFAULT 0,
+          next_escalation_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `),
+      db.prepare(`
         CREATE TABLE IF NOT EXISTS time_preferences (
           id TEXT PRIMARY KEY NOT NULL DEFAULT 'default',
           time_zone TEXT NOT NULL DEFAULT 'UTC',
@@ -226,6 +254,15 @@ export function ensureCommandSchema() {
           quiet_hours_end TEXT NOT NULL DEFAULT '07:00',
           quiet_behavior TEXT NOT NULL DEFAULT 'delay',
           notification_permission TEXT NOT NULL DEFAULT 'in-app-only',
+          default_view TEXT NOT NULL DEFAULT 'day',
+          default_event_duration_minutes INTEGER NOT NULL DEFAULT 60,
+          transition_buffer_minutes INTEGER NOT NULL DEFAULT 15,
+          morning_brief_time TEXT NOT NULL DEFAULT '07:00',
+          evening_brief_time TEXT NOT NULL DEFAULT '20:00',
+          escalation_enabled INTEGER NOT NULL DEFAULT 1,
+          default_snooze_minutes INTEGER NOT NULL DEFAULT 60,
+          overload_minutes_per_day INTEGER NOT NULL DEFAULT 480,
+          overload_important_item_count INTEGER NOT NULL DEFAULT 5,
           updated_at TEXT NOT NULL
         )
       `),
@@ -247,6 +284,7 @@ export function ensureCommandSchema() {
       location: "TEXT NOT NULL DEFAULT ''",
       category: "TEXT",
       event_status: "TEXT NOT NULL DEFAULT 'confirmed'",
+      event_metadata: "TEXT NOT NULL DEFAULT '{}'",
       recurrence_rule: "TEXT",
       source_id: "TEXT",
       external_calendar_id: "TEXT",
@@ -257,6 +295,17 @@ export function ensureCommandSchema() {
       conflict_state: "TEXT NOT NULL DEFAULT 'none'",
       deleted_at: "TEXT",
       migrated_to_routine_id: "TEXT",
+    });
+    await ensureColumns(db, "time_preferences", {
+      default_view: "TEXT NOT NULL DEFAULT 'day'",
+      default_event_duration_minutes: "INTEGER NOT NULL DEFAULT 60",
+      transition_buffer_minutes: "INTEGER NOT NULL DEFAULT 15",
+      morning_brief_time: "TEXT NOT NULL DEFAULT '07:00'",
+      evening_brief_time: "TEXT NOT NULL DEFAULT '20:00'",
+      escalation_enabled: "INTEGER NOT NULL DEFAULT 1",
+      default_snooze_minutes: "INTEGER NOT NULL DEFAULT 60",
+      overload_minutes_per_day: "INTEGER NOT NULL DEFAULT 480",
+      overload_important_item_count: "INTEGER NOT NULL DEFAULT 5",
     });
 
     await db.batch([
@@ -291,6 +340,14 @@ export function ensureCommandSchema() {
       db.prepare(`
         CREATE INDEX IF NOT EXISTS reminders_entity_idx
         ON reminders (entity_type, entity_id)
+      `),
+      db.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS reminder_instance_occurrence_rule_idx
+        ON reminder_instances (reminder_id, occurrence_key)
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS reminder_instance_state_due_idx
+        ON reminder_instances (state, scheduled_for)
       `),
     ]);
 
@@ -383,35 +440,38 @@ export async function getPriority(id: string) {
   return row ? priorityFromRow(row) : null;
 }
 
-export async function createPriority(input: PriorityInput) {
+export async function createPriority(
+  input: PriorityInput,
+  id = crypto.randomUUID(),
+) {
   await ensureCommandSchema();
   const db = commandDatabase();
   const isTop = input.isTop ?? true;
-  const count = await db
-    .prepare(
-      `SELECT COUNT(*) AS count FROM priorities
-       WHERE status = 'active' AND is_top = 1 AND archived_at IS NULL`,
-    )
-    .first<{ count: number }>();
-  if (isTop && (count?.count ?? 0) >= 3) {
-    throw new Error("Complete or demote a top priority before adding another.");
-  }
-  const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await db
     .prepare(
-      `INSERT INTO priorities
+      `INSERT OR IGNORE INTO priorities
        (id, title, notes, due_at, status, position, is_top,
         scheduled_start_at, scheduled_end_at, reminder_enabled,
         reminder_offset_minutes, source, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, 'local', ?, ?)`,
+       SELECT ?, ?, ?, ?, 'active',
+              CASE WHEN ? = 1 THEN COALESCE((
+                SELECT MAX(position) + 1 FROM priorities
+                WHERE status = 'active' AND is_top = 1
+                  AND archived_at IS NULL
+              ), 0) ELSE 0 END,
+              ?, ?, ?, ?, ?, 'local', ?, ?
+       WHERE ? = 0 OR (
+         SELECT COUNT(*) FROM priorities
+         WHERE status = 'active' AND is_top = 1 AND archived_at IS NULL
+       ) < 3`,
     )
     .bind(
       id,
       input.title,
       input.notes ?? "",
       input.dueAt ?? null,
-      isTop ? (count?.count ?? 0) : 0,
+      isTop ? 1 : 0,
       isTop ? 1 : 0,
       input.scheduledStartAt ?? null,
       input.scheduledEndAt ?? null,
@@ -419,54 +479,83 @@ export async function createPriority(input: PriorityInput) {
       input.reminderOffsetMinutes ?? null,
       now,
       now,
+      isTop ? 1 : 0,
     )
     .run();
-  return (await getPriority(id))!;
+  const created = await getPriority(id);
+  if (!created) {
+    throw new ConflictError(
+      "Complete or demote a top priority before adding another.",
+    );
+  }
+  return created;
 }
 
 export async function updatePriority(id: string, update: PriorityUpdate) {
   const current = await getPriority(id);
   if (!current) return null;
   const status = update.status ?? current.status;
-  const now = new Date().toISOString();
-  if (update.isTop && !current.isTop && status === "active") {
-    const count = await commandDatabase()
-      .prepare(
-        `SELECT COUNT(*) AS count FROM priorities
-         WHERE status = 'active' AND is_top = 1 AND archived_at IS NULL`,
-      )
-      .first<{ count: number }>();
-    if ((count?.count ?? 0) >= 3) {
-      throw new Error("Demote a top priority before promoting another.");
-    }
+  const isTop = update.isTop ?? current.isTop !== false;
+  const now = new Date(
+    Math.max(Date.now(), Date.parse(current.updatedAt) + 1),
+  ).toISOString();
+  const archivedAt =
+    update.archived === undefined
+      ? (current.archivedAt ?? null)
+      : update.archived
+        ? now
+        : null;
+  const occupiesTop =
+    current.status === "active" &&
+    current.isTop !== false &&
+    !current.archivedAt;
+  const wantsTop = status === "active" && isTop && !archivedAt;
+  const enteringTop = wantsTop && !occupiesTop;
+  const scheduledStartAt =
+    update.scheduledStartAt === undefined
+      ? (current.scheduledStartAt ?? null)
+      : update.scheduledStartAt;
+  const scheduledEndAt =
+    update.scheduledEndAt === undefined
+      ? (current.scheduledEndAt ?? null)
+      : update.scheduledEndAt;
+  if (
+    scheduledStartAt &&
+    scheduledEndAt &&
+    Date.parse(scheduledEndAt) <= Date.parse(scheduledStartAt)
+  ) {
+    throw new ValidationError("Focus time must end after it starts.");
   }
   await commandDatabase()
     .prepare(
       `UPDATE priorities
        SET title = ?, notes = ?, due_at = ?, status = ?, is_top = ?,
+           position = CASE WHEN ? = 1 THEN COALESCE((
+             SELECT MAX(position) + 1 FROM priorities
+             WHERE status = 'active' AND is_top = 1
+               AND archived_at IS NULL AND id != ?
+           ), 0) ELSE position END,
            scheduled_start_at = ?, scheduled_end_at = ?,
            reminder_enabled = ?, reminder_offset_minutes = ?,
            archived_at = ?, updated_at = ?, completed_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND (
+         ? = 0 OR (
+           SELECT COUNT(*) FROM priorities
+           WHERE status = 'active' AND is_top = 1
+             AND archived_at IS NULL AND id != ?
+         ) < 3
+       )`,
     )
     .bind(
       update.title ?? current.title,
       update.notes ?? current.notes ?? "",
       update.dueAt === undefined ? current.dueAt : update.dueAt,
       status,
-      update.isTop === undefined
-        ? current.isTop === false
-          ? 0
-          : 1
-        : update.isTop
-          ? 1
-          : 0,
-      update.scheduledStartAt === undefined
-        ? (current.scheduledStartAt ?? null)
-        : update.scheduledStartAt,
-      update.scheduledEndAt === undefined
-        ? (current.scheduledEndAt ?? null)
-        : update.scheduledEndAt,
+      isTop ? 1 : 0,
+      enteringTop ? 1 : 0,
+      id,
+      scheduledStartAt,
+      scheduledEndAt,
       update.reminderEnabled === undefined
         ? current.reminderEnabled
           ? 1
@@ -477,33 +566,59 @@ export async function updatePriority(id: string, update: PriorityUpdate) {
       update.reminderOffsetMinutes === undefined
         ? (current.reminderOffsetMinutes ?? null)
         : update.reminderOffsetMinutes,
-      update.archived ? now : (current.archivedAt ?? null),
+      archivedAt,
       now,
       status === "completed" ? (current.completedAt ?? now) : null,
       id,
+      enteringTop ? 1 : 0,
+      id,
     )
     .run();
-  return getPriority(id);
+  const updated = await getPriority(id);
+  if (enteringTop && updated?.updatedAt !== now) {
+    throw new ConflictError(
+      "Demote a top priority before promoting or restoring another.",
+    );
+  }
+  return updated;
 }
 
 export async function deletePriority(id: string) {
   const current = await getPriority(id);
   if (!current) return null;
-  const db = commandDatabase();
-  await db.batch([
-    db
-      .prepare(
-        "DELETE FROM reminders WHERE entity_type = 'priority' AND entity_id = ?",
-      )
-      .bind(id),
-    db.prepare("DELETE FROM priorities WHERE id = ?").bind(id),
-  ]);
+  if (current.archivedAt) return current;
+  const now = new Date().toISOString();
+  await commandDatabase()
+    .prepare(
+      `UPDATE priorities
+       SET archived_at = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(now, now, id)
+    .run();
   return current;
 }
 
 export async function reorderPriorities(ids: string[]) {
   await ensureCommandSchema();
   const db = commandDatabase();
+  const current = await db
+    .prepare(
+      `SELECT id FROM priorities
+       WHERE status = 'active' AND is_top = 1 AND archived_at IS NULL
+       ORDER BY position ASC`,
+    )
+    .all<{ id: string }>();
+  const currentIds = current.results.map((item) => item.id);
+  if (
+    currentIds.length !== ids.length ||
+    currentIds.some((id) => !ids.includes(id))
+  ) {
+    throw new ConflictError(
+      "The top priorities changed elsewhere. Refresh before reordering.",
+    );
+  }
+  const now = new Date().toISOString();
   await db.batch(
     ids.map((id, position) =>
       db
@@ -511,7 +626,7 @@ export async function reorderPriorities(ids: string[]) {
           `UPDATE priorities SET position = ?, updated_at = ?
            WHERE id = ? AND status = 'active' AND is_top = 1`,
         )
-        .bind(position, new Date().toISOString(), id),
+        .bind(position, now, id),
     ),
   );
   return listPriorities();
@@ -541,14 +656,16 @@ export async function getTimelineItem(id: string) {
   return row ? timelineFromRow(row) : null;
 }
 
-export async function createTimelineItem(input: TimelineInput) {
+export async function createTimelineItem(
+  input: TimelineInput,
+  id = crypto.randomUUID(),
+) {
   await ensureCommandSchema();
-  const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const allDay = input.kind === "all-day";
   await commandDatabase()
     .prepare(
-      `INSERT INTO timeline_items
+      `INSERT OR IGNORE INTO timeline_items
        (id, title, kind, status, start_at, end_at, local_date, end_local_date,
         start_time, end_time, time_zone, notes, location, event_status,
         local_version, conflict_state, source, created_at, updated_at)
@@ -634,13 +751,12 @@ export async function deleteTimelineItem(id: string) {
   return current;
 }
 
-export async function createCapture(content: string) {
+export async function createCapture(content: string, id = crypto.randomUUID()) {
   await ensureCommandSchema();
-  const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await commandDatabase()
     .prepare(
-      `INSERT INTO quick_captures
+      `INSERT OR IGNORE INTO quick_captures
        (id, content, source, created_at, updated_at)
        VALUES (?, ?, 'local', ?, ?)`,
     )

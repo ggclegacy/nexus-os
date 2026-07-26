@@ -44,7 +44,23 @@ function optionalIso(value: unknown, label: string): string | null {
 }
 
 function optionalText(value: unknown, max: number) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value !== "string") {
+    throw new ValidationError("Text value is invalid.");
+  }
+  const normalized = value.trim();
+  if (normalized.length > max) {
+    throw new ValidationError(`Text must be ${max} characters or fewer.`);
+  }
+  return normalized;
+}
+
+function optionalBoolean(value: unknown, label: string, fallback: boolean) {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") {
+    throw new ValidationError(`${label} must be true or false.`);
+  }
+  return value;
 }
 
 function optionalMinutes(value: unknown, label: string) {
@@ -74,10 +90,14 @@ export function parsePriorityInput(value: unknown): PriorityInput {
     title: text(input.title, "Priority", MAX_TITLE),
     notes: optionalText(input.notes, MAX_NOTES),
     dueAt: optionalIso(input.dueAt, "Due time"),
-    isTop: input.isTop === undefined ? true : Boolean(input.isTop),
+    isTop: optionalBoolean(input.isTop, "Top priority", true),
     scheduledStartAt: optionalIso(input.scheduledStartAt, "Focus start"),
     scheduledEndAt: optionalIso(input.scheduledEndAt, "Focus end"),
-    reminderEnabled: Boolean(input.reminderEnabled),
+    reminderEnabled: optionalBoolean(
+      input.reminderEnabled,
+      "Reminder enabled",
+      false,
+    ),
     reminderOffsetMinutes: optionalMinutes(
       input.reminderOffsetMinutes,
       "Reminder timing",
@@ -99,7 +119,9 @@ export function parsePriorityUpdate(value: unknown): PriorityUpdate {
   if ("title" in input) update.title = text(input.title, "Priority", MAX_TITLE);
   if ("notes" in input) update.notes = optionalText(input.notes, MAX_NOTES);
   if ("dueAt" in input) update.dueAt = optionalIso(input.dueAt, "Due time");
-  if ("isTop" in input) update.isTop = Boolean(input.isTop);
+  if ("isTop" in input) {
+    update.isTop = optionalBoolean(input.isTop, "Top priority", false);
+  }
   if ("scheduledStartAt" in input) {
     update.scheduledStartAt = optionalIso(
       input.scheduledStartAt,
@@ -109,9 +131,15 @@ export function parsePriorityUpdate(value: unknown): PriorityUpdate {
   if ("scheduledEndAt" in input) {
     update.scheduledEndAt = optionalIso(input.scheduledEndAt, "Focus end");
   }
-  if ("archived" in input) update.archived = Boolean(input.archived);
+  if ("archived" in input) {
+    update.archived = optionalBoolean(input.archived, "Archived", false);
+  }
   if ("reminderEnabled" in input) {
-    update.reminderEnabled = Boolean(input.reminderEnabled);
+    update.reminderEnabled = optionalBoolean(
+      input.reminderEnabled,
+      "Reminder enabled",
+      false,
+    );
   }
   if ("reminderOffsetMinutes" in input) {
     update.reminderOffsetMinutes = optionalMinutes(
@@ -162,19 +190,18 @@ export function parseTimelineInput(value: unknown): TimelineInput {
     endAt,
     localDate: input.localDate,
     timeZone: timeZone(input.timeZone),
-    notes:
-      typeof input.notes === "string"
-        ? input.notes.trim().slice(0, MAX_NOTES)
-        : "",
+    notes: optionalText(input.notes, MAX_NOTES),
   };
 }
 
 export function parseTimelineUpdate(value: unknown): TimelineUpdate {
   const input = record(value);
-  if ("status" in input && Object.keys(input).length === 1) {
+  if ("status" in input) {
     if (!["scheduled", "completed", "skipped"].includes(String(input.status))) {
       throw new ValidationError("Timeline status is invalid.");
     }
+  }
+  if ("status" in input && Object.keys(input).length === 1) {
     return { status: input.status as TimelineUpdate["status"] };
   }
   return {

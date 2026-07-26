@@ -5,6 +5,7 @@ import {
 } from "../../../../db/time-repository";
 import {
   parseCalendarEvent,
+  parseDateKey,
   parseRecurrenceScope,
 } from "../../../../lib/time/validation";
 import { jsonError, readJson } from "../../../../lib/server/http";
@@ -24,9 +25,9 @@ export async function PATCH(request: Request, context: Context) {
     };
     const input = parseCalendarEvent(body.event);
     const occurrenceDate =
-      typeof body.occurrenceDate === "string"
-        ? body.occurrenceDate
-        : input.localDate;
+      body.occurrenceDate === undefined
+        ? input.localDate
+        : parseDateKey(body.occurrenceDate, "Occurrence date");
     const scope = parseRecurrenceScope(body.scope ?? "series");
     const conflicts = await findEventConflicts(input, id);
     if (conflicts.length && !body.acknowledgeConflict) {
@@ -60,15 +61,10 @@ export async function DELETE(request: Request, context: Context) {
       occurrenceDate?: unknown;
       scope?: unknown;
     };
-    if (typeof body.occurrenceDate !== "string") {
-      return Response.json(
-        { error: "Occurrence date is required." },
-        { status: 400 },
-      );
-    }
+    const occurrenceDate = parseDateKey(body.occurrenceDate, "Occurrence date");
     const result = await deleteCalendarEvent(
       id,
-      body.occurrenceDate,
+      occurrenceDate,
       parseRecurrenceScope(body.scope ?? "series"),
     );
     if (!result) {

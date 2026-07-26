@@ -2,8 +2,9 @@
 
 Nexus OS is a private personal command system. Phases 1 and 2 provide the
 shared application foundation, responsive Command Center, and a functional
-personal time system for events, priorities, routines, reminders, and quiet
-hours.
+Today-first personal time system for typed events, priorities, routines,
+advanced recurrence, persistent reminder lifecycles, planning views, briefs,
+Rescue Mode, and quiet hours.
 
 ## Local development
 
@@ -38,16 +39,28 @@ npm run start
 
 The repository is also configured for a standard Next.js deployment on
 Vercel. The Vercel build uses Turso/libSQL for the same SQLite data model that
-the local Cloudflare build stores in D1.
+the local Cloudflare build stores in D1. Hosted requests are denied unless the
+single-owner access gate is configured.
 
 1. Import `ggclegacy/nexus-os` into Vercel.
 2. Add the Turso integration from the Vercel Marketplace to the project. It
    supplies `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`.
-3. Deploy. `vercel.json` selects the verified `npm run build:vercel` build.
+3. Add `NEXUS_ACCESS_USERNAME` and a long, unique
+   `NEXUS_ACCESS_PASSWORD` to every hosted environment.
+4. Deploy. `vercel.json` selects the verified `npm run build:vercel` build.
 
-For a manually managed Turso database, add those two environment variables in
+For a manually managed Turso database, add all four environment variables in
 Vercel using `.env.example` as the reference. The application initializes an
-empty database on the first API request.
+empty database on the first authenticated API request.
+
+`NEXT_PUBLIC_SITE_URL` is optional on Vercel because the production project URL
+is available during the build. Set it on other hosts when you want absolute
+Open Graph and social-preview URLs to use a custom domain.
+
+The access gate intentionally allows `localhost`, `127.0.0.1`, and `::1`
+without credentials for local development. It uses HTTP Basic authentication
+over the hosting provider's HTTPS connection, is suitable for this
+single-owner release, and is not a multi-user identity or sharing system.
 
 To exercise the Vercel runtime locally, omit `TURSO_DATABASE_URL` to use the
 ignored `local.db` file:
@@ -79,5 +92,10 @@ npm run db:generate
 
 ## Current scope
 
-Command and Calendar are functional. Other destinations intentionally show an
-honest not-built-yet state until their approved roadmap phases are implemented.
+Command and Calendar are functional. Calendar opens on a Today workspace with
+time awareness, attention and upcoming queues, typed Quick Add defaults, event
+details, rescheduling, safe recurring scope, payment/completion state, and
+reload persistence. Agenda, Week, Month, Reminder Center, Birthday Planning,
+Bill Planning, deterministic briefs, and Rescue Mode are available from the
+Calendar workspace. Other destinations intentionally show an honest
+not-built-yet state until their approved roadmap phases are implemented.

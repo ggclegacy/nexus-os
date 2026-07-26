@@ -16,6 +16,7 @@ import type {
   CalendarFilters,
   CalendarPayload,
   RecurrenceEditScope,
+  ReminderInstance,
   Routine,
   RoutineInput,
   RoutineOccurrence,
@@ -80,7 +81,10 @@ export class FakeCommandApi implements CommandApi {
 
   async load() {
     if (this.failLoad) throw new Error("Simulated Command failure.");
-    return commandData([...this.priorities], [...this.timeline]);
+    return commandData(
+      this.priorities.filter((item) => !item.archivedAt),
+      [...this.timeline],
+    );
   }
 
   async createPriority(input: PriorityInput) {
@@ -116,6 +120,12 @@ export class FakeCommandApi implements CommandApi {
     const next = {
       ...current,
       ...update,
+      archivedAt:
+        update.archived === undefined
+          ? current.archivedAt
+          : update.archived
+            ? new Date().toISOString()
+            : null,
       dueAt: update.dueAt === undefined ? current.dueAt : update.dueAt,
       completedAt:
         update.status === "completed"
@@ -130,9 +140,10 @@ export class FakeCommandApi implements CommandApi {
   }
 
   async deletePriority(id: string) {
-    const index = this.priorities.findIndex((item) => item.id === id);
-    const [deleted] = this.priorities.splice(index, 1);
-    return deleted;
+    const priority = this.priorities.find((item) => item.id === id);
+    if (!priority) throw new Error("Priority not found.");
+    priority.archivedAt = new Date().toISOString();
+    return priority;
   }
 
   async reorderPriorities(ids: string[]) {
@@ -190,6 +201,7 @@ export class FakeTimeApi implements TimeApi {
   priorities: Priority[] = [];
   routines: Routine[] = [];
   occurrences: RoutineOccurrence[] = [];
+  reminderInstances: ReminderInstance[] = [];
   preferences: TimePreferences = {
     timeZone: "America/Chicago",
     locale: "en-US",
@@ -200,6 +212,15 @@ export class FakeTimeApi implements TimeApi {
     quietHoursEnd: "07:00",
     quietBehavior: "delay",
     notificationPermission: "in-app-only",
+    defaultView: "day",
+    defaultEventDurationMinutes: 60,
+    transitionBufferMinutes: 15,
+    morningBriefTime: "07:00",
+    eveningBriefTime: "20:00",
+    escalationEnabled: true,
+    defaultSnoozeMinutes: 60,
+    overloadMinutesPerDay: 480,
+    overloadImportantItemCount: 5,
     updatedAt: now,
   };
   failLoad = false;
@@ -217,17 +238,50 @@ export class FakeTimeApi implements TimeApi {
       rangeStart: start,
       rangeEnd: end,
       events: filters.includeEvents
-        ? this.events.filter(
-            (item) =>
-              !query ||
-              item.title.toLowerCase().includes(query) ||
-              item.notes.toLowerCase().includes(query),
-          )
+        ? this.events.filter((item) => {
+            const searchable = [
+              item.title,
+              item.notes,
+              item.location,
+              item.provider,
+              item.billCategory,
+              item.accountNote,
+              item.relationship,
+              item.giftIdea,
+              item.amount === null ? "" : String(item.amount),
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            return (
+              (!query || searchable.includes(query)) &&
+              (!filters.eventTypes.length ||
+                filters.eventTypes.includes(item.eventType)) &&
+              (!filters.statuses.length ||
+                filters.statuses.includes(item.status)) &&
+              (!filters.priorities.length ||
+                filters.priorities.includes(item.priority)) &&
+              (filters.includeCompleted ||
+                filters.statuses.includes(item.status) ||
+                !["completed", "dismissed", "cancelled"].includes(
+                  item.status,
+                )) &&
+              (filters.payment === "all" ||
+                item.paymentStatus === filters.payment) &&
+              (filters.recurrence === "all" ||
+                (filters.recurrence === "recurring"
+                  ? item.recurrence !== null
+                  : item.recurrence === null))
+            );
+          })
         : [],
-      priorities: filters.includePriorities ? [...this.priorities] : [],
+      priorities: filters.includePriorities
+        ? this.priorities.filter((item) => !item.archivedAt)
+        : [],
       routines: filters.includeRoutines ? [...this.routines] : [],
       occurrences: filters.includeRoutines ? [...this.occurrences] : [],
       reminders: [],
+      reminderInstances: [...this.reminderInstances],
       preferences: this.preferences,
       sourceLabel: "Private local workspace",
       lastUpdatedAt: new Date().toISOString(),
@@ -255,9 +309,15 @@ export class FakeTimeApi implements TimeApi {
       occurrenceDate: input.localDate,
       seriesId: input.recurrence ? id : null,
       title: input.title,
+      eventType: input.eventType,
       notes: input.notes,
       location: input.location,
-      category: input.category,
+      provider: input.provider,
+      meetingUrl: input.meetingUrl,
+      amount: input.amount,
+      currency: input.currency,
+      paymentStatus: input.paymentStatus,
+      priority: input.priority,
       status: input.status,
       allDay: input.allDay,
       localDate: input.localDate,
@@ -348,11 +408,16 @@ export class FakeTimeApi implements TimeApi {
       throw new Error("Only three active priorities can be in the top three.");
     }
     Object.assign(priority, update, { updatedAt: new Date().toISOString() });
+    if (update.archived !== undefined) {
+      priority.archivedAt = update.archived ? new Date().toISOString() : null;
+    }
     return priority;
   }
 
   async deletePriority(id: string) {
-    this.priorities = this.priorities.filter((item) => item.id !== id);
+    const priority = this.priorities.find((item) => item.id === id);
+    if (!priority) throw new Error("Priority not found.");
+    priority.archivedAt = new Date().toISOString();
   }
 
   async reorderPriorities(ids: string[]) {
@@ -426,5 +491,25 @@ export class FakeTimeApi implements TimeApi {
   async updatePreferences(input: TimePreferences) {
     this.preferences = { ...input, updatedAt: new Date().toISOString() };
     return this.preferences;
+  }
+
+  async updateReminder(
+    id: string,
+    action: "seen" | "snooze" | "resolve" | "dismiss",
+    snoozedUntil?: string,
+  ) {
+    const reminder = this.reminderInstances.find((item) => item.id === id);
+    if (!reminder) throw new Error("Reminder not found.");
+    reminder.state =
+      action === "seen"
+        ? "seen"
+        : action === "snooze"
+          ? "snoozed"
+          : action === "dismiss"
+            ? "dismissed"
+            : "resolved";
+    reminder.snoozedUntil = action === "snooze" ? (snoozedUntil ?? null) : null;
+    reminder.updatedAt = new Date().toISOString();
+    return reminder;
   }
 }

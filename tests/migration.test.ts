@@ -23,3 +23,43 @@ describe("Phase 2 migration safety", () => {
     expect(sql).not.toMatch(/DELETE FROM `(?:priorities|timeline_items)`/);
   });
 });
+
+describe("Calendar Phase 1 metadata migration safety", () => {
+  const sql = readFileSync(
+    resolve(process.cwd(), "drizzle/0002_thick_ultron.sql"),
+    "utf8",
+  );
+
+  it("adds event metadata without rewriting canonical event records", () => {
+    expect(sql).toContain("ALTER TABLE `timeline_items` ADD `event_metadata`");
+    expect(sql).not.toMatch(/DROP TABLE|DELETE FROM|CREATE TABLE/);
+  });
+});
+
+describe("Calendar Phase 2 reminder migration safety", () => {
+  const sql = readFileSync(
+    resolve(process.cwd(), "drizzle/0003_slippery_wolverine.sql"),
+    "utf8",
+  );
+
+  it("adds persistent reminder lifecycle records and preference controls", () => {
+    expect(sql).toContain("CREATE TABLE `reminder_instances`");
+    expect(sql).toContain(
+      "CREATE UNIQUE INDEX `reminder_instance_occurrence_rule_idx`",
+    );
+    expect(sql).toContain("ALTER TABLE `time_preferences` ADD `default_view`");
+    expect(sql).toContain(
+      "ALTER TABLE `time_preferences` ADD `transition_buffer_minutes`",
+    );
+    expect(sql).toContain(
+      "ALTER TABLE `time_preferences` ADD `escalation_enabled`",
+    );
+  });
+
+  it("is additive and does not rewrite canonical event or reminder data", () => {
+    expect(sql).not.toMatch(/DROP TABLE|DELETE FROM/);
+    expect(sql).not.toMatch(
+      /ALTER TABLE `(?:timeline_items|reminders)` (?:DROP|RENAME)/,
+    );
+  });
+});

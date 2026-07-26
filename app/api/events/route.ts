@@ -3,7 +3,7 @@ import {
   findEventConflicts,
 } from "../../../db/time-repository";
 import { parseCalendarEvent } from "../../../lib/time/validation";
-import { jsonError, readJson } from "../../../lib/server/http";
+import { jsonError, readJson, requestId } from "../../../lib/server/http";
 
 export async function POST(request: Request) {
   try {
@@ -28,7 +28,10 @@ export async function POST(request: Request) {
       );
     }
     return Response.json(
-      { event: await createCalendarEvent(input), conflicts },
+      {
+        event: await createCalendarEvent(input, requestId(request)),
+        conflicts,
+      },
       { status: 201 },
     );
   } catch (error) {

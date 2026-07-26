@@ -133,4 +133,39 @@ describe("Command Center workflow", () => {
       screen.getByRole("link", { name: "Nexus OS Command" }),
     ).toHaveFocus();
   });
+
+  it("does not auto-promote ordinary priorities and restores a removed record in place", async () => {
+    const user = userEvent.setup();
+    const api = new FakeCommandApi();
+    const ordinary = await api.createPriority({
+      title: "Ordinary upcoming item",
+      isTop: false,
+    });
+    ordinary.isTop = false;
+    const protectedPriority = await api.createPriority({
+      title: "Preserve this record",
+      notes: "Keep the original identifier",
+      isTop: true,
+    });
+    protectedPriority.isTop = true;
+
+    render(<CommandCenter api={api} />);
+    await screen.findByText("Preserve this record");
+    expect(
+      screen.queryByText("Ordinary upcoming item"),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Delete Preserve this record" }),
+    );
+    expect(await screen.findByRole("button", { name: "Undo" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() =>
+      expect(
+        api.priorities.find((item) => item.id === protectedPriority.id)
+          ?.archivedAt,
+      ).toBeNull(),
+    );
+  });
 });

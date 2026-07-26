@@ -15,6 +15,20 @@
       "when": 1785093097662,
       "tag": "0001_icy_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785099578831,
+      "tag": "0002_thick_ultron",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785101799155,
+      "tag": "0003_slippery_wolverine",
+      "breakpoints": true
     }
   ]
 }

@@ -23,10 +23,12 @@ export function Panel({
 export function SectionHeader({
   eyebrow,
   title,
+  detail,
   action,
 }: {
   eyebrow?: string;
   title: string;
+  detail?: string;
   action?: ReactNode;
 }) {
   return (
@@ -34,6 +36,7 @@ export function SectionHeader({
       <div>
         {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
         <h2>{title}</h2>
+        {detail ? <p className="section-header__detail">{detail}</p> : null}
       </div>
       {action}
     </header>

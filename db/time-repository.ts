@@ -3,6 +3,7 @@ import {
   addDays,
   daysBetween,
   expandRecurrence,
+  isInQuietHours,
   localTimeInZone,
   routineOccurrenceStatus,
   zonedDateTimeToUtc,
@@ -16,6 +17,8 @@ import type {
   RecurrenceEditScope,
   RecurrenceRule,
   Reminder,
+  ReminderInstance,
+  ReminderState,
   Routine,
   RoutineInput,
   RoutineOccurrence,
@@ -82,6 +85,26 @@ type ReminderRow = {
   updated_at: string;
 };
 
+type ReminderInstanceRow = {
+  id: string;
+  reminder_id: string;
+  event_id: string;
+  occurrence_date: string;
+  occurrence_key: string;
+  scheduled_for: string;
+  delivered_at: string | null;
+  seen_at: string | null;
+  snoozed_until: string | null;
+  resolved_at: string | null;
+  state: ReminderState;
+  reason: string;
+  rule_label: string;
+  escalation_level: number;
+  next_escalation_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type PreferencesRow = {
   time_zone: string;
   locale: string;
@@ -92,6 +115,15 @@ type PreferencesRow = {
   quiet_hours_end: string;
   quiet_behavior: TimePreferences["quietBehavior"];
   notification_permission: TimePreferences["notificationPermission"];
+  default_view: TimePreferences["defaultView"];
+  default_event_duration_minutes: number;
+  transition_buffer_minutes: number;
+  morning_brief_time: string;
+  evening_brief_time: string;
+  escalation_enabled: number;
+  default_snooze_minutes: number;
+  overload_minutes_per_day: number;
+  overload_important_item_count: number;
   updated_at: string;
 };
 
@@ -160,6 +192,28 @@ function reminderFromRow(row: ReminderRow): Reminder {
   };
 }
 
+function reminderInstanceFromRow(row: ReminderInstanceRow): ReminderInstance {
+  return {
+    id: row.id,
+    reminderId: row.reminder_id,
+    eventId: row.event_id,
+    occurrenceDate: row.occurrence_date,
+    occurrenceKey: row.occurrence_key,
+    scheduledFor: row.scheduled_for,
+    deliveredAt: row.delivered_at,
+    seenAt: row.seen_at,
+    snoozedUntil: row.snoozed_until,
+    resolvedAt: row.resolved_at,
+    state: row.state,
+    reason: row.reason,
+    ruleLabel: row.rule_label,
+    escalationLevel: row.escalation_level,
+    nextEscalationAt: row.next_escalation_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function preferencesFromRow(row: PreferencesRow): TimePreferences {
   return {
     timeZone: row.time_zone,
@@ -171,17 +225,83 @@ function preferencesFromRow(row: PreferencesRow): TimePreferences {
     quietHoursEnd: row.quiet_hours_end,
     quietBehavior: row.quiet_behavior,
     notificationPermission: row.notification_permission,
+    defaultView: row.default_view,
+    defaultEventDurationMinutes: row.default_event_duration_minutes,
+    transitionBufferMinutes: row.transition_buffer_minutes,
+    morningBriefTime: row.morning_brief_time,
+    eveningBriefTime: row.evening_brief_time,
+    escalationEnabled: Boolean(row.escalation_enabled),
+    defaultSnoozeMinutes: row.default_snooze_minutes,
+    overloadMinutesPerDay: row.overload_minutes_per_day,
+    overloadImportantItemCount: row.overload_important_item_count,
     updatedAt: row.updated_at,
   };
 }
 
 function eventInputFromRow(row: TimelineRow): CalendarEventInput {
+  const metadata = parseJson<
+    Pick<
+      CalendarEventInput,
+      | "eventType"
+      | "provider"
+      | "meetingUrl"
+      | "amount"
+      | "currency"
+      | "paymentStatus"
+      | "priority"
+      | "status"
+      | "relationship"
+      | "birthYear"
+      | "giftIdea"
+      | "contactMethod"
+      | "billCategory"
+      | "autopay"
+      | "accountNote"
+      | "paidAt"
+      | "escalationEnabled"
+    >
+  >(row.event_metadata, {
+    eventType: "personal",
+    provider: "",
+    meetingUrl: "",
+    amount: null,
+    currency: "USD",
+    paymentStatus: null,
+    priority: "standard",
+    status: row.event_status === "canceled" ? "cancelled" : "scheduled",
+    relationship: "",
+    birthYear: null,
+    giftIdea: "",
+    contactMethod: "",
+    billCategory: "",
+    autopay: false,
+    accountNote: "",
+    paidAt: null,
+    escalationEnabled: true,
+  });
   return {
     title: row.title,
+    ...metadata,
     notes: row.notes,
     location: row.location,
-    category: row.category,
-    status: row.event_status,
+    eventType:
+      metadata.eventType === "personal" && row.category
+        ? [
+            "personal",
+            "medical",
+            "financial",
+            "meeting",
+            "workout",
+            "protocol",
+            "family",
+            "birthday",
+            "travel",
+            "reminder",
+            "custom",
+          ].includes(row.category)
+          ? (row.category as CalendarEventInput["eventType"])
+          : "custom"
+        : metadata.eventType,
     allDay: row.kind === "all-day",
     localDate: row.local_date,
     endLocalDate: row.end_local_date ?? row.local_date,
@@ -354,7 +474,12 @@ export async function updateTimePreferences(input: TimePreferences) {
        SET time_zone = ?, locale = ?, week_starts_on = ?, hour_cycle = ?,
            quiet_hours_enabled = ?, quiet_hours_start = ?,
            quiet_hours_end = ?, quiet_behavior = ?,
-           notification_permission = ?, updated_at = ?
+           notification_permission = ?, default_view = ?,
+           default_event_duration_minutes = ?, transition_buffer_minutes = ?,
+           morning_brief_time = ?, evening_brief_time = ?,
+           escalation_enabled = ?, default_snooze_minutes = ?,
+           overload_minutes_per_day = ?,
+           overload_important_item_count = ?, updated_at = ?
        WHERE id = 'default'`,
     )
     .bind(
@@ -367,6 +492,15 @@ export async function updateTimePreferences(input: TimePreferences) {
       input.quietHoursEnd,
       input.quietBehavior,
       input.notificationPermission,
+      input.defaultView,
+      input.defaultEventDurationMinutes,
+      input.transitionBufferMinutes,
+      input.morningBriefTime,
+      input.eveningBriefTime,
+      input.escalationEnabled ? 1 : 0,
+      input.defaultSnoozeMinutes,
+      input.overloadMinutesPerDay,
+      input.overloadImportantItemCount,
       now,
     )
     .run();
@@ -379,25 +513,295 @@ async function replaceReminders(
   offsets: number[],
 ) {
   const db = commandDatabase();
-  await db
-    .prepare("DELETE FROM reminders WHERE entity_type = ? AND entity_id = ?")
-    .bind(entityType, entityId)
-    .run();
-  if (!offsets.length) return;
   const now = new Date().toISOString();
-  await db.batch(
-    offsets.map((offset) =>
+  await db.batch([
+    db
+      .prepare("DELETE FROM reminders WHERE entity_type = ? AND entity_id = ?")
+      .bind(entityType, entityId),
+    ...offsets.map((offset) =>
       db
         .prepare(
-          `INSERT INTO reminders
+          `INSERT OR REPLACE INTO reminders
            (id, entity_type, entity_id, offset_minutes, channel, enabled,
             quiet_behavior, delivery_status, delivered_at, created_at,
             updated_at)
            VALUES (?, ?, ?, ?, 'in-app', 1, 'delay', 'pending', NULL, ?, ?)`,
         )
-        .bind(crypto.randomUUID(), entityType, entityId, offset, now, now),
+        .bind(
+          `reminder:${entityType}:${entityId}:${offset}:in-app`,
+          entityType,
+          entityId,
+          offset,
+          now,
+          now,
+        ),
     ),
+  ]);
+  await db
+    .prepare(
+      `UPDATE reminder_instances
+       SET state = 'expired', resolved_at = ?, updated_at = ?
+       WHERE event_id = ?
+         AND state IN ('scheduled', 'delivered', 'seen', 'snoozed')
+         AND NOT EXISTS (
+           SELECT 1 FROM reminders
+           WHERE reminders.id = reminder_instances.reminder_id
+         )`,
+    )
+    .bind(now, now, entityId)
+    .run();
+}
+
+function reminderReason(event: CalendarEvent, offset: number) {
+  if (event.eventType === "financial")
+    return event.paymentStatus === "unpaid"
+      ? "Bill payment is still unresolved."
+      : "Bill due-date reminder.";
+  if (event.eventType === "birthday") return "Birthday planning reminder.";
+  if (event.eventType === "medical") return "Medical appointment reminder.";
+  if (offset === 0) return "Scheduled event is due.";
+  return "User-configured event reminder.";
+}
+
+function reminderRuleLabel(event: CalendarEvent, offset: number) {
+  const timing =
+    offset === 0
+      ? "At event time"
+      : offset % 1_440 === 0
+        ? `${offset / 1_440} day${offset === 1_440 ? "" : "s"} before`
+        : offset % 60 === 0
+          ? `${offset / 60} hour${offset === 60 ? "" : "s"} before`
+          : `${offset} minutes before`;
+  return `${event.eventType} preset · ${timing}`;
+}
+
+async function reconcileReminderInstances(
+  events: CalendarEvent[],
+  definitions: Reminder[],
+  preferences: TimePreferences,
+  now = new Date(),
+) {
+  const db = commandDatabase();
+  const timestamp = now.toISOString();
+  const eventDefinitions = new Map<string, Reminder[]>();
+  for (const definition of definitions) {
+    if (definition.entityType !== "event" || !definition.enabled) continue;
+    eventDefinitions.set(definition.entityId, [
+      ...(eventDefinitions.get(definition.entityId) ?? []),
+      definition,
+    ]);
+  }
+  const statements = events.flatMap((event) => {
+    const anchor = event.startAt
+      ? event.startAt
+      : event.allDay
+        ? zonedDateTimeToUtc(event.localDate, "09:00", event.timeZone)
+        : null;
+    if (!anchor) return [];
+    return (eventDefinitions.get(event.id) ?? []).map((definition) => {
+      const scheduledFor = new Date(
+        Date.parse(anchor) - definition.offsetMinutes * 60_000,
+      ).toISOString();
+      const id = `reminder-instance:${definition.id}:${event.occurrenceKey}`;
+      return db
+        .prepare(
+          `INSERT INTO reminder_instances
+           (id, reminder_id, event_id, occurrence_date, occurrence_key,
+            scheduled_for, delivered_at, seen_at, snoozed_until, resolved_at,
+            state, reason, rule_label, escalation_level, next_escalation_at,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, 'scheduled',
+            ?, ?, 0, NULL, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             scheduled_for = excluded.scheduled_for,
+             reason = excluded.reason,
+             rule_label = excluded.rule_label,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(
+          id,
+          definition.id,
+          event.id,
+          event.occurrenceDate,
+          event.occurrenceKey,
+          scheduledFor,
+          reminderReason(event, definition.offsetMinutes),
+          reminderRuleLabel(event, definition.offsetMinutes),
+          timestamp,
+          timestamp,
+        );
+    });
+  });
+  if (statements.length) await db.batch(statements);
+
+  for (const event of events) {
+    const resolved =
+      ["completed", "dismissed", "cancelled"].includes(event.status) ||
+      event.paymentStatus === "paid";
+    if (!resolved) continue;
+    await db
+      .prepare(
+        `UPDATE reminder_instances
+         SET state = 'resolved', resolved_at = ?, next_escalation_at = NULL,
+             updated_at = ?
+         WHERE occurrence_key = ?
+           AND state NOT IN ('resolved', 'dismissed', 'expired')`,
+      )
+      .bind(timestamp, timestamp, event.occurrenceKey)
+      .run();
+  }
+
+  const pending = await db
+    .prepare(
+      `SELECT * FROM reminder_instances
+       WHERE state IN ('scheduled', 'delivered', 'seen', 'snoozed')
+       ORDER BY scheduled_for ASC LIMIT 1000`,
+    )
+    .all<ReminderInstanceRow>();
+  const eventMap = new Map(events.map((event) => [event.occurrenceKey, event]));
+  const quiet = isInQuietHours(
+    localTimeInZone(now, preferences.timeZone),
+    preferences,
   );
+  for (const row of pending.results) {
+    const event = eventMap.get(row.occurrence_key);
+    if (!event) continue;
+    const dueAt =
+      row.state === "snoozed" && row.snoozed_until
+        ? row.snoozed_until
+        : row.scheduled_for;
+    if (Date.parse(dueAt) > now.getTime()) continue;
+    if (quiet && preferences.quietBehavior === "suppress") {
+      await db
+        .prepare(
+          `UPDATE reminder_instances
+           SET state = 'expired', resolved_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .bind(timestamp, timestamp, row.id)
+        .run();
+      continue;
+    }
+    if (quiet && preferences.quietBehavior === "delay") continue;
+    if (row.state === "scheduled" || row.state === "snoozed") {
+      const cap = event.priority === "critical" ? 3 : 1;
+      const nextEscalationAt =
+        preferences.escalationEnabled &&
+        event.escalationEnabled !== false &&
+        event.priority !== "standard"
+          ? new Date(
+              now.getTime() +
+                (event.priority === "critical" ? 30 : 60) * 60_000,
+            ).toISOString()
+          : null;
+      await db
+        .prepare(
+          `UPDATE reminder_instances
+           SET state = 'delivered', delivered_at = COALESCE(delivered_at, ?),
+               snoozed_until = NULL, next_escalation_at = ?,
+               escalation_level = MIN(escalation_level, ?), updated_at = ?
+           WHERE id = ?`,
+        )
+        .bind(timestamp, nextEscalationAt, cap, timestamp, row.id)
+        .run();
+      continue;
+    }
+    const cap = event.priority === "critical" ? 3 : 1;
+    if (
+      preferences.escalationEnabled &&
+      event.escalationEnabled !== false &&
+      event.priority !== "standard" &&
+      row.next_escalation_at &&
+      Date.parse(row.next_escalation_at) <= now.getTime() &&
+      row.escalation_level < cap
+    ) {
+      await db
+        .prepare(
+          `UPDATE reminder_instances
+           SET escalation_level = escalation_level + 1,
+               next_escalation_at = CASE
+                 WHEN escalation_level + 1 >= ? THEN NULL ELSE ?
+               END,
+               state = 'delivered', updated_at = ?
+           WHERE id = ?`,
+        )
+        .bind(
+          cap,
+          new Date(
+            now.getTime() + (event.priority === "critical" ? 30 : 60) * 60_000,
+          ).toISOString(),
+          timestamp,
+          row.id,
+        )
+        .run();
+    }
+  }
+}
+
+async function listReminderInstances() {
+  const result = await commandDatabase()
+    .prepare(
+      `SELECT * FROM reminder_instances
+       ORDER BY COALESCE(snoozed_until, scheduled_for) ASC
+       LIMIT 1000`,
+    )
+    .all<ReminderInstanceRow>();
+  return result.results.map(reminderInstanceFromRow);
+}
+
+export async function updateReminderInstance(
+  id: string,
+  action: "seen" | "snooze" | "resolve" | "dismiss",
+  snoozedUntil?: string | null,
+) {
+  await ensureTimeSchema();
+  const now = new Date().toISOString();
+  const current = await commandDatabase()
+    .prepare("SELECT * FROM reminder_instances WHERE id = ?")
+    .bind(id)
+    .first<ReminderInstanceRow>();
+  if (!current) return null;
+  const nextState: ReminderState =
+    action === "seen"
+      ? "seen"
+      : action === "snooze"
+        ? "snoozed"
+        : action === "dismiss"
+          ? "dismissed"
+          : "resolved";
+  await commandDatabase()
+    .prepare(
+      `UPDATE reminder_instances
+       SET state = ?, seen_at = CASE WHEN ? = 'seen' THEN ? ELSE seen_at END,
+           snoozed_until = CASE WHEN ? = 'snoozed' THEN ? ELSE NULL END,
+           resolved_at = CASE
+             WHEN ? IN ('resolved', 'dismissed') THEN ? ELSE NULL
+           END,
+           next_escalation_at = CASE
+             WHEN ? IN ('resolved', 'dismissed', 'snoozed') THEN NULL
+             ELSE next_escalation_at
+           END,
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(
+      nextState,
+      nextState,
+      now,
+      nextState,
+      snoozedUntil ?? null,
+      nextState,
+      now,
+      nextState,
+      now,
+      id,
+    )
+    .run();
+  const updated = await commandDatabase()
+    .prepare("SELECT * FROM reminder_instances WHERE id = ?")
+    .bind(id)
+    .first<ReminderInstanceRow>();
+  return updated ? reminderInstanceFromRow(updated) : null;
 }
 
 async function getEventRow(id: string) {
@@ -409,6 +813,28 @@ async function getEventRow(id: string) {
     )
     .bind(id)
     .first<TimelineRow>();
+}
+
+function eventMetadata(input: CalendarEventInput) {
+  return JSON.stringify({
+    eventType: input.eventType,
+    provider: input.provider,
+    meetingUrl: input.meetingUrl,
+    amount: input.amount,
+    currency: input.currency,
+    paymentStatus: input.paymentStatus,
+    priority: input.priority,
+    status: input.status,
+    relationship: input.relationship ?? "",
+    birthYear: input.birthYear ?? null,
+    giftIdea: input.giftIdea ?? "",
+    contactMethod: input.contactMethod ?? "",
+    billCategory: input.billCategory ?? "",
+    autopay: input.autopay ?? false,
+    accountNote: input.accountNote ?? "",
+    paidAt: input.paidAt ?? null,
+    escalationEnabled: input.escalationEnabled ?? true,
+  });
 }
 
 async function writeEvent(
@@ -427,14 +853,14 @@ async function writeEvent(
       : zonedDateTimeToUtc(input.endLocalDate, input.endTime, input.timeZone);
   await commandDatabase()
     .prepare(
-      `INSERT INTO timeline_items
+      `INSERT OR IGNORE INTO timeline_items
        (id, title, kind, status, start_at, end_at, local_date, end_local_date,
         start_time, end_time, time_zone, notes, location, category,
-        event_status, recurrence_rule, source, source_id,
+        event_status, event_metadata, recurrence_rule, source, source_id,
         external_calendar_id, last_synced_at, local_version, remote_version,
         read_only, conflict_state, deleted_at, migrated_to_routine_id,
         created_at, updated_at)
-       VALUES (?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       VALUES (?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         'local', NULL, NULL, NULL, 1, NULL, 0, 'none', NULL, NULL, ?, ?)`,
     )
     .bind(
@@ -450,8 +876,9 @@ async function writeEvent(
       input.timeZone,
       input.notes,
       input.location,
-      input.category,
-      input.status,
+      input.eventType,
+      input.status === "cancelled" ? "canceled" : "confirmed",
+      eventMetadata(input),
       input.recurrence ? JSON.stringify(input.recurrence) : null,
       createdAt,
       now,
@@ -461,9 +888,11 @@ async function writeEvent(
   return id;
 }
 
-export async function createCalendarEvent(input: CalendarEventInput) {
+export async function createCalendarEvent(
+  input: CalendarEventInput,
+  id = crypto.randomUUID(),
+) {
   await ensureTimeSchema();
-  const id = crypto.randomUUID();
   await writeEvent(id, input);
   return getCalendarEventOccurrence(id, input.localDate);
 }
@@ -484,7 +913,8 @@ async function updateSeriesRow(id: string, input: CalendarEventInput) {
        SET title = ?, kind = ?, start_at = ?, end_at = ?, local_date = ?,
            end_local_date = ?, start_time = ?, end_time = ?, time_zone = ?,
            notes = ?, location = ?, category = ?, event_status = ?,
-           recurrence_rule = ?, local_version = local_version + 1,
+           event_metadata = ?, recurrence_rule = ?,
+           local_version = local_version + 1,
            conflict_state = 'none', updated_at = ?
        WHERE id = ? AND read_only = 0`,
     )
@@ -500,8 +930,9 @@ async function updateSeriesRow(id: string, input: CalendarEventInput) {
       input.timeZone,
       input.notes,
       input.location,
-      input.category,
-      input.status,
+      input.eventType,
+      input.status === "cancelled" ? "canceled" : "confirmed",
+      eventMetadata(input),
       input.recurrence ? JSON.stringify(input.recurrence) : null,
       now,
       id,
@@ -651,6 +1082,14 @@ export async function deleteCalendarEvent(
           "DELETE FROM reminders WHERE entity_type = 'event' AND entity_id = ?",
         )
         .bind(id),
+      db
+        .prepare(
+          `UPDATE reminder_instances
+           SET state = 'expired', resolved_at = ?, updated_at = ?
+           WHERE event_id = ?
+             AND state IN ('scheduled', 'delivered', 'seen', 'snoozed')`,
+        )
+        .bind(now, now, id),
     ]);
     return { id, scope: "series" as const };
   }
@@ -789,7 +1228,13 @@ export async function findEventConflicts(
   input: CalendarEventInput,
   excludeId?: string,
 ) {
-  if (input.allDay || !input.startTime || !input.endTime) return [];
+  if (
+    input.allDay ||
+    input.status !== "scheduled" ||
+    !input.startTime ||
+    !input.endTime
+  )
+    return [];
   const candidateStart = Date.parse(
     zonedDateTimeToUtc(input.localDate, input.startTime, input.timeZone),
   );
@@ -800,6 +1245,7 @@ export async function findEventConflicts(
   return events.filter((event) => {
     if (
       event.id === excludeId ||
+      event.status !== "scheduled" ||
       event.allDay ||
       !event.startAt ||
       !event.endAt
@@ -834,13 +1280,15 @@ export async function getRoutine(id: string) {
   return row ? routineFromRow(row) : null;
 }
 
-export async function createRoutine(input: RoutineInput) {
+export async function createRoutine(
+  input: RoutineInput,
+  id = crypto.randomUUID(),
+) {
   await ensureTimeSchema();
-  const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await commandDatabase()
     .prepare(
-      `INSERT INTO routines
+      `INSERT OR IGNORE INTO routines
        (id, name, description, recurrence_rule, preferred_time, window_start,
         window_end, expected_minutes, start_date, end_date, state,
         reminder_enabled, reminder_offset_minutes, source, created_at,
@@ -1049,41 +1497,28 @@ export async function updateRoutineOccurrence(
   const routine = await getRoutine(routineId);
   if (!routine) return null;
   const now = new Date().toISOString();
-  const existing = await commandDatabase()
+  await commandDatabase()
     .prepare(
-      `SELECT id FROM routine_occurrences
-       WHERE routine_id = ? AND scheduled_date = ?`,
+      `INSERT INTO routine_occurrences
+       (id, routine_id, scheduled_date, status, completed_at, note, source,
+        updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'local', ?)
+       ON CONFLICT(routine_id, scheduled_date) DO UPDATE SET
+         status = excluded.status,
+         completed_at = excluded.completed_at,
+         note = excluded.note,
+         updated_at = excluded.updated_at`,
     )
-    .bind(routineId, scheduledDate)
-    .first<{ id: string }>();
-  if (existing) {
-    await commandDatabase()
-      .prepare(
-        `UPDATE routine_occurrences
-         SET status = ?, completed_at = ?, note = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .bind(status, status === "completed" ? now : null, note, now, existing.id)
-      .run();
-  } else {
-    await commandDatabase()
-      .prepare(
-        `INSERT INTO routine_occurrences
-         (id, routine_id, scheduled_date, status, completed_at, note, source,
-          updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'local', ?)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        routineId,
-        scheduledDate,
-        status,
-        status === "completed" ? now : null,
-        note,
-        now,
-      )
-      .run();
-  }
+    .bind(
+      `occurrence:${routineId}:${scheduledDate}`,
+      routineId,
+      scheduledDate,
+      status,
+      status === "completed" ? now : null,
+      note,
+      now,
+    )
+    .run();
   const preferences = await getTimePreferences();
   return (
     await listRoutineOccurrences(
@@ -1117,14 +1552,51 @@ export async function listCalendarPayload(
       listRoutineOccurrences(rangeStart, rangeEnd, preferences.timeZone),
       listReminderRows(),
     ]);
+  await reconcileReminderInstances(
+    allEvents,
+    reminders,
+    preferences,
+    new Date(),
+  );
+  const reminderInstances = await listReminderInstances();
   const query = filters.query.trim().toLocaleLowerCase();
   const events = filters.includeEvents
     ? allEvents.filter(
         (event) =>
           (!query ||
             includesQuery(event.title, query) ||
-            includesQuery(event.notes, query)) &&
-          (filters.includeCompleted || event.status !== "canceled"),
+            includesQuery(event.notes, query) ||
+            includesQuery(event.location, query) ||
+            includesQuery(event.provider, query) ||
+            includesQuery(event.meetingUrl, query) ||
+            includesQuery(event.eventType, query) ||
+            includesQuery(event.paymentStatus, query) ||
+            includesQuery(event.status, query) ||
+            includesQuery(event.relationship, query) ||
+            includesQuery(event.billCategory, query) ||
+            (event.amount !== null &&
+              new Intl.NumberFormat(preferences.locale, {
+                style: "currency",
+                currency: event.currency,
+              })
+                .format(event.amount)
+                .toLocaleLowerCase()
+                .includes(query))) &&
+          (!filters.eventTypes.length ||
+            filters.eventTypes.includes(event.eventType)) &&
+          (!filters.statuses.length ||
+            filters.statuses.includes(event.status)) &&
+          (!filters.priorities.length ||
+            filters.priorities.includes(event.priority)) &&
+          (filters.payment === "all" ||
+            event.paymentStatus === filters.payment) &&
+          (filters.recurrence === "all" ||
+            (filters.recurrence === "recurring"
+              ? Boolean(event.recurrence)
+              : !event.recurrence)) &&
+          (filters.includeCompleted ||
+            filters.statuses.includes(event.status) ||
+            !["completed", "dismissed", "cancelled"].includes(event.status)),
       )
     : [];
   const priorities = filters.includePriorities
@@ -1161,6 +1633,7 @@ export async function listCalendarPayload(
     routines,
     occurrences,
     reminders,
+    reminderInstances,
     preferences,
     sourceLabel: "Private local workspace",
     lastUpdatedAt: new Date().toISOString(),
@@ -1181,7 +1654,12 @@ export async function listCommandTimeline(
     id: event.occurrenceKey,
     title: event.title,
     kind: event.allDay ? "all-day" : "event",
-    status: event.status === "canceled" ? "skipped" : "scheduled",
+    status:
+      event.status === "completed"
+        ? "completed"
+        : event.status === "dismissed" || event.status === "cancelled"
+          ? "skipped"
+          : "scheduled",
     startAt: event.startAt,
     endAt: event.endAt,
     localDate: event.localDate,
@@ -1191,7 +1669,7 @@ export async function listCommandTimeline(
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
     location: event.location,
-    category: event.category,
+    category: event.eventType,
     isRecurring: Boolean(event.seriesId),
     seriesId: event.seriesId,
     occurrenceDate: event.occurrenceDate,

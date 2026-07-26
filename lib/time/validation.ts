@@ -1,12 +1,14 @@
 import { ValidationError } from "../domain/validation";
 import type {
   CalendarEventInput,
+  CalendarEventType,
   RecurrenceEditScope,
   RecurrenceRule,
   RoutineInput,
   RoutineOccurrenceStatus,
   TimePreferences,
 } from "./types";
+import { eventTypeDefaults } from "./event-types";
 import { assertDateKey, assertTimeKey, zonedDateTimeToUtc } from "./rules";
 
 const MAX_TITLE = 160;
@@ -36,7 +38,11 @@ function optionalText(value: unknown, label: string, max: number) {
   if (typeof value !== "string") {
     throw new ValidationError(`${label} must be text.`);
   }
-  return value.trim().slice(0, max);
+  const normalized = value.trim();
+  if (normalized.length > max) {
+    throw new ValidationError(`${label} must be ${max} characters or fewer.`);
+  }
+  return normalized;
 }
 
 function date(value: unknown, label: string) {
@@ -79,6 +85,18 @@ function timeZone(value: unknown) {
   return value;
 }
 
+function optionalBoolean(value: unknown, label: string, fallback: boolean) {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") {
+    throw new ValidationError(`${label} must be true or false.`);
+  }
+  return value;
+}
+
+export function parseDateKey(value: unknown, label: string) {
+  return date(value, label);
+}
+
 export function parseRecurrence(value: unknown): RecurrenceRule | null {
   if (value === null || value === undefined || value === "") return null;
   const input = record(value);
@@ -100,8 +118,30 @@ export function parseRecurrence(value: unknown): RecurrenceRule | null {
   ) {
     throw new ValidationError("Selected weekdays are invalid.");
   }
-  const monthlyMode =
-    input.monthlyMode === "relative" ? "relative" : ("date" as const);
+  const monthlyMode = ["date", "relative", "last-day"].includes(
+    String(input.monthlyMode),
+  )
+    ? (input.monthlyMode as RecurrenceRule["monthlyMode"])
+    : ("date" as const);
+  const monthlyWeekday =
+    input.monthlyWeekday === null || input.monthlyWeekday === undefined
+      ? null
+      : Number(input.monthlyWeekday);
+  if (
+    monthlyWeekday !== null &&
+    (!Number.isInteger(monthlyWeekday) ||
+      monthlyWeekday < 0 ||
+      monthlyWeekday > 6)
+  ) {
+    throw new ValidationError("Monthly weekday is invalid.");
+  }
+  const monthlyOrdinal =
+    input.monthlyOrdinal === null || input.monthlyOrdinal === undefined
+      ? null
+      : Number(input.monthlyOrdinal);
+  if (monthlyOrdinal !== null && ![1, 2, 3, 4, -1].includes(monthlyOrdinal)) {
+    throw new ValidationError("Monthly position is invalid.");
+  }
   const count =
     input.count === null || input.count === undefined || input.count === ""
       ? null
@@ -117,6 +157,8 @@ export function parseRecurrence(value: unknown): RecurrenceRule | null {
     interval,
     weekdays: [...new Set(weekdays)].sort(),
     monthlyMode,
+    monthlyWeekday,
+    monthlyOrdinal: monthlyOrdinal as RecurrenceRule["monthlyOrdinal"],
     until: optionalDate(input.until, "Recurrence end"),
     count,
   };
@@ -141,7 +183,32 @@ function reminderOffsets(value: unknown) {
 
 export function parseCalendarEvent(value: unknown): CalendarEventInput {
   const input = record(value);
-  const allDay = Boolean(input.allDay);
+  const eventTypes: CalendarEventType[] = [
+    "personal",
+    "medical",
+    "financial",
+    "meeting",
+    "workout",
+    "protocol",
+    "family",
+    "birthday",
+    "travel",
+    "reminder",
+    "custom",
+  ];
+  if (
+    input.eventType !== undefined &&
+    !eventTypes.includes(input.eventType as CalendarEventType)
+  ) {
+    throw new ValidationError("Event type is invalid.");
+  }
+  const eventType = (input.eventType ?? "personal") as CalendarEventType;
+  const defaults = eventTypeDefaults(eventType);
+  const allDay = optionalBoolean(
+    input.allDay,
+    "All-day setting",
+    defaults.allDay,
+  );
   const localDate = date(input.localDate, "Start date");
   const endLocalDate = date(input.endLocalDate ?? input.localDate, "End date");
   if (endLocalDate < localDate) {
@@ -170,23 +237,110 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
       throw new ValidationError("Event end must be after its start.");
     }
   }
-  const status = ["confirmed", "tentative", "canceled"].includes(
-    String(input.status),
-  )
-    ? (input.status as CalendarEventInput["status"])
-    : "confirmed";
-  const recurrence = parseRecurrence(input.recurrence);
+  const status =
+    input.status === undefined
+      ? "scheduled"
+      : ["scheduled", "completed", "dismissed", "cancelled"].includes(
+            String(input.status),
+          )
+        ? (input.status as CalendarEventInput["status"])
+        : null;
+  if (!status) throw new ValidationError("Event status is invalid.");
+  const recurrence =
+    input.recurrence === undefined
+      ? defaults.recurrence
+      : parseRecurrence(input.recurrence);
   if (recurrence?.until && recurrence.until < localDate) {
     throw new ValidationError("Recurrence end must not precede its start.");
   }
+  const meetingUrl = optionalText(
+    input.meetingUrl,
+    "Meeting link",
+    MAX_LOCATION,
+  );
+  if (meetingUrl) {
+    try {
+      const parsed = new URL(meetingUrl);
+      if (!["https:", "http:"].includes(parsed.protocol)) throw new Error();
+    } catch {
+      throw new ValidationError("Meeting link must be a valid web address.");
+    }
+  }
+  const amount =
+    input.amount === null || input.amount === undefined || input.amount === ""
+      ? null
+      : Number(input.amount);
+  if (
+    amount !== null &&
+    (!Number.isFinite(amount) ||
+      amount < 0 ||
+      amount > 1_000_000_000 ||
+      Math.round(amount * 100) !== amount * 100)
+  ) {
+    throw new ValidationError(
+      "Amount must be a positive value with no more than two decimal places.",
+    );
+  }
+  const currency =
+    typeof input.currency === "string" && /^[A-Za-z]{3}$/.test(input.currency)
+      ? input.currency.toUpperCase()
+      : "USD";
+  const paymentStatus =
+    input.paymentStatus === null || input.paymentStatus === undefined
+      ? eventType === "financial"
+        ? "unpaid"
+        : null
+      : ["unpaid", "paid"].includes(String(input.paymentStatus))
+        ? (input.paymentStatus as CalendarEventInput["paymentStatus"])
+        : null;
+  if (
+    input.paymentStatus !== null &&
+    input.paymentStatus !== undefined &&
+    paymentStatus === null
+  ) {
+    throw new ValidationError("Payment status is invalid.");
+  }
+  const priority = ["standard", "important", "critical"].includes(
+    String(input.priority ?? "standard"),
+  )
+    ? ((input.priority ?? "standard") as CalendarEventInput["priority"])
+    : null;
+  if (!priority) throw new ValidationError("Event priority is invalid.");
+  const birthYear =
+    input.birthYear === null ||
+    input.birthYear === undefined ||
+    input.birthYear === ""
+      ? null
+      : Number(input.birthYear);
+  if (
+    birthYear !== null &&
+    (!Number.isInteger(birthYear) ||
+      birthYear < 1800 ||
+      birthYear > new Date().getUTCFullYear())
+  ) {
+    throw new ValidationError("Birth year is invalid.");
+  }
+  const paidAt =
+    input.paidAt === null || input.paidAt === undefined || input.paidAt === ""
+      ? null
+      : typeof input.paidAt === "string" &&
+          Number.isFinite(Date.parse(input.paidAt))
+        ? new Date(input.paidAt).toISOString()
+        : null;
+  if (input.paidAt && !paidAt) {
+    throw new ValidationError("Paid date is invalid.");
+  }
   return {
     title: requiredText(input.title, "Event title", MAX_TITLE),
+    eventType,
     notes: optionalText(input.notes, "Notes", MAX_NOTES),
     location: optionalText(input.location, "Location", MAX_LOCATION),
-    category:
-      typeof input.category === "string" && input.category.trim()
-        ? input.category.trim().slice(0, 40)
-        : null,
+    provider: optionalText(input.provider, "Provider", 160),
+    meetingUrl,
+    amount,
+    currency,
+    paymentStatus,
+    priority,
     status,
     allDay,
     localDate,
@@ -195,7 +349,27 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
     endTime,
     timeZone: zone,
     recurrence,
-    reminderOffsets: reminderOffsets(input.reminderOffsets),
+    reminderOffsets:
+      input.reminderOffsets === undefined
+        ? defaults.reminderOffsets
+        : reminderOffsets(input.reminderOffsets),
+    relationship: optionalText(input.relationship, "Relationship", 120),
+    birthYear,
+    giftIdea: optionalText(input.giftIdea, "Gift idea", 500),
+    contactMethod: optionalText(
+      input.contactMethod,
+      "Preferred contact method",
+      120,
+    ),
+    billCategory: optionalText(input.billCategory, "Bill category", 120),
+    autopay: optionalBoolean(input.autopay, "Autopay", false),
+    accountNote: optionalText(input.accountNote, "Account note", 500),
+    paidAt,
+    escalationEnabled: optionalBoolean(
+      input.escalationEnabled,
+      "Reminder escalation",
+      true,
+    ),
   };
 }
 
@@ -228,9 +402,13 @@ export function parseRoutine(value: unknown): RoutineInput {
   ) {
     throw new ValidationError("Expected duration must be 1–1440 minutes.");
   }
-  const state = ["active", "paused", "archived"].includes(String(input.state))
-    ? (input.state as RoutineInput["state"])
-    : "active";
+  const state =
+    input.state === undefined
+      ? "active"
+      : ["active", "paused", "archived"].includes(String(input.state))
+        ? (input.state as RoutineInput["state"])
+        : null;
+  if (!state) throw new ValidationError("Routine state is invalid.");
   const schedule = parseRecurrence(input.schedule);
   if (!schedule) throw new ValidationError("Routine schedule is required.");
   const startDate = date(input.startDate, "Start date");
@@ -266,7 +444,11 @@ export function parseRoutine(value: unknown): RoutineInput {
     startDate,
     endDate,
     state,
-    reminderEnabled: Boolean(input.reminderEnabled),
+    reminderEnabled: optionalBoolean(
+      input.reminderEnabled,
+      "Reminder enabled",
+      false,
+    ),
     reminderOffsetMinutes: reminderOffset,
   };
 }
@@ -286,29 +468,108 @@ export function parseOccurrenceUpdate(value: unknown) {
 
 export function parseTimePreferences(value: unknown): TimePreferences {
   const input = record(value);
-  const weekStartsOn = Number(input.weekStartsOn) === 0 ? 0 : 1;
-  const hourCycle = input.hourCycle === "24" ? "24" : "12";
-  const quietBehavior = ["delay", "suppress", "allow"].includes(
-    String(input.quietBehavior),
+  if (input.weekStartsOn !== 0 && input.weekStartsOn !== 1) {
+    throw new ValidationError("Week start is invalid.");
+  }
+  const weekStartsOn = input.weekStartsOn;
+  if (input.hourCycle !== "12" && input.hourCycle !== "24") {
+    throw new ValidationError("Hour format is invalid.");
+  }
+  const hourCycle = input.hourCycle;
+  if (!["delay", "suppress", "allow"].includes(String(input.quietBehavior))) {
+    throw new ValidationError("Quiet-hours behavior is invalid.");
+  }
+  const quietBehavior = input.quietBehavior as TimePreferences["quietBehavior"];
+  if (
+    input.notificationPermission !== "denied" &&
+    input.notificationPermission !== "in-app-only"
+  ) {
+    throw new ValidationError("Notification capability is invalid.");
+  }
+  const defaultView = ["day", "agenda", "week", "month"].includes(
+    String(input.defaultView ?? "day"),
   )
-    ? (input.quietBehavior as TimePreferences["quietBehavior"])
-    : "delay";
+    ? (input.defaultView as TimePreferences["defaultView"])
+    : null;
+  if (!defaultView)
+    throw new ValidationError("Default Calendar view is invalid.");
+  const integerSetting = (
+    value: unknown,
+    fallback: number,
+    min: number,
+    max: number,
+    label: string,
+  ) => {
+    const result = value === undefined ? fallback : Number(value);
+    if (!Number.isInteger(result) || result < min || result > max) {
+      throw new ValidationError(`${label} is invalid.`);
+    }
+    return result;
+  };
   return {
     timeZone: timeZone(input.timeZone),
     locale:
       typeof input.locale === "string" && input.locale.trim()
-        ? input.locale.trim().slice(0, 30)
+        ? optionalText(input.locale, "Locale", 30)
         : "en-US",
     weekStartsOn,
     hourCycle,
-    quietHoursEnabled: Boolean(input.quietHoursEnabled),
+    quietHoursEnabled: optionalBoolean(
+      input.quietHoursEnabled,
+      "Quiet hours",
+      false,
+    ),
     quietHoursStart:
       optionalTime(input.quietHoursStart, "Quiet hours start") ?? "22:00",
     quietHoursEnd:
       optionalTime(input.quietHoursEnd, "Quiet hours end") ?? "07:00",
     quietBehavior,
-    notificationPermission:
-      input.notificationPermission === "denied" ? "denied" : "in-app-only",
+    notificationPermission: input.notificationPermission,
+    defaultView,
+    defaultEventDurationMinutes: integerSetting(
+      input.defaultEventDurationMinutes,
+      60,
+      15,
+      480,
+      "Default event duration",
+    ),
+    transitionBufferMinutes: integerSetting(
+      input.transitionBufferMinutes,
+      15,
+      0,
+      180,
+      "Transition buffer",
+    ),
+    morningBriefTime:
+      optionalTime(input.morningBriefTime, "Morning Brief time") ?? "07:00",
+    eveningBriefTime:
+      optionalTime(input.eveningBriefTime, "Evening Brief time") ?? "20:00",
+    escalationEnabled: optionalBoolean(
+      input.escalationEnabled,
+      "Reminder escalation",
+      true,
+    ),
+    defaultSnoozeMinutes: integerSetting(
+      input.defaultSnoozeMinutes,
+      60,
+      15,
+      1_440,
+      "Default snooze",
+    ),
+    overloadMinutesPerDay: integerSetting(
+      input.overloadMinutesPerDay,
+      480,
+      60,
+      1_440,
+      "Daily overload threshold",
+    ),
+    overloadImportantItemCount: integerSetting(
+      input.overloadImportantItemCount,
+      5,
+      1,
+      20,
+      "Important-item overload threshold",
+    ),
     updatedAt: new Date().toISOString(),
   };
 }

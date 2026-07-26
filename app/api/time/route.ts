@@ -1,14 +1,33 @@
 import { listCalendarPayload } from "../../../db/time-repository";
+import { ValidationError } from "../../../lib/domain/validation";
 import { daysBetween } from "../../../lib/time/rules";
 import type { CalendarFilters } from "../../../lib/time/types";
+import { parseDateKey } from "../../../lib/time/validation";
 import { jsonError } from "../../../lib/server/http";
 
 function date(value: string | null, fallback: string) {
-  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : fallback;
+  return value === null ? fallback : parseDateKey(value, "Calendar date");
 }
 
 function enabled(value: string | null, fallback = true) {
-  return value === null ? fallback : value !== "false";
+  if (value === null) return fallback;
+  if (value !== "true" && value !== "false") {
+    throw new ValidationError("Calendar filter is invalid.");
+  }
+  return value === "true";
+}
+
+function list<T extends string>(
+  value: string | null,
+  allowed: readonly T[],
+  label: string,
+) {
+  if (!value) return [];
+  const values = [...new Set(value.split(",").filter(Boolean))];
+  if (values.some((item) => !allowed.includes(item as T))) {
+    throw new ValidationError(`${label} filter is invalid.`);
+  }
+  return values as T[];
 }
 
 export async function GET(request: Request) {
@@ -17,9 +36,15 @@ export async function GET(request: Request) {
     const today = new Date().toISOString().slice(0, 10);
     const start = date(url.searchParams.get("start"), today);
     const end = date(url.searchParams.get("end"), start);
-    if (daysBetween(start, end) > 93) {
+    const rangeDays = daysBetween(start, end);
+    if (rangeDays < 0 || rangeDays > 370) {
       return Response.json(
-        { error: "Calendar ranges are limited to 94 days." },
+        {
+          error:
+            rangeDays < 0
+              ? "Calendar range end must not precede its start."
+              : "Calendar ranges are limited to 371 days.",
+        },
         { status: 400 },
       );
     }
@@ -29,6 +54,49 @@ export async function GET(request: Request) {
       includePriorities: enabled(url.searchParams.get("priorities")),
       includeRoutines: enabled(url.searchParams.get("routines")),
       includeCompleted: enabled(url.searchParams.get("completed"), false),
+      eventTypes: list(
+        url.searchParams.get("types"),
+        [
+          "personal",
+          "medical",
+          "financial",
+          "meeting",
+          "workout",
+          "protocol",
+          "family",
+          "birthday",
+          "travel",
+          "reminder",
+          "custom",
+        ] as const,
+        "Event type",
+      ),
+      statuses: list(
+        url.searchParams.get("statuses"),
+        ["scheduled", "completed", "dismissed", "cancelled"] as const,
+        "Status",
+      ),
+      priorities: list(
+        url.searchParams.get("importance"),
+        ["standard", "important", "critical"] as const,
+        "Priority",
+      ),
+      payment: ["all", "paid", "unpaid"].includes(
+        url.searchParams.get("payment") ?? "all",
+      )
+        ? ((url.searchParams.get("payment") ??
+            "all") as CalendarFilters["payment"])
+        : (() => {
+            throw new ValidationError("Payment filter is invalid.");
+          })(),
+      recurrence: ["all", "recurring", "one-time"].includes(
+        url.searchParams.get("recurrence") ?? "all",
+      )
+        ? ((url.searchParams.get("recurrence") ??
+            "all") as CalendarFilters["recurrence"])
+        : (() => {
+            throw new ValidationError("Recurrence filter is invalid.");
+          })(),
     };
     const requestedTimeZone = url.searchParams.get("timeZone");
     const displayTimeZone = requestedTimeZone

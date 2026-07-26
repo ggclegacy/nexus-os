@@ -279,9 +279,8 @@ export function CommandCenter({
       notify("Priority removed.", {
         actionLabel: "Undo",
         onAction: async () => {
-          const restored = await api.createPriority({
-            title: priority.title,
-            dueAt: priority.dueAt,
+          const restored = await api.updatePriority(priority.id, {
+            archived: false,
           });
           setData((current) =>
             current ? replacePriority(current, restored) : current,
@@ -299,7 +298,7 @@ export function CommandCenter({
   const movePriority = async (priority: Priority, direction: -1 | 1) => {
     if (!data) return;
     const active = data.priorities.data
-      .filter((item) => item.status === "active")
+      .filter((item) => item.status === "active" && item.isTop !== false)
       .sort((a, b) => a.position - b.position);
     const index = active.findIndex((item) => item.id === priority.id);
     const nextIndex = index + direction;
@@ -595,7 +594,7 @@ function PriorityPanel({
   onRetry(): void;
 }) {
   const active = data.priorities.data
-    .filter((item) => item.status === "active")
+    .filter((item) => item.status === "active" && item.isTop !== false)
     .sort((a, b) => a.position - b.position)
     .slice(0, 3);
   const completed = data.priorities.data.filter(

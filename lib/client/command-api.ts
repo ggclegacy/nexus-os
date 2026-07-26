@@ -25,13 +25,23 @@ export interface CommandApi {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const idempotencyKey =
+    init?.method === "POST" ? crypto.randomUUID() : undefined;
+  const requestInit: RequestInit = {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
       ...init?.headers,
     },
-  });
+  };
+  let response: Response;
+  try {
+    response = await fetch(url, requestInit);
+  } catch (error) {
+    if (!idempotencyKey) throw error;
+    response = await fetch(url, requestInit);
+  }
   const payload = (await response.json()) as T & { error?: string };
   if (!response.ok) {
     throw new Error(payload.error ?? "The request could not be completed.");

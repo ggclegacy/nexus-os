@@ -63,6 +63,7 @@ export const timelineItems = sqliteTable(
     location: text("location").notNull().default(""),
     category: text("category"),
     eventStatus: text("event_status").notNull().default("confirmed"),
+    eventMetadata: text("event_metadata").notNull().default("{}"),
     endLocalDate: text("end_local_date"),
     startTime: text("start_time"),
     endTime: text("end_time"),
@@ -202,6 +203,43 @@ export const reminders = sqliteTable(
   ],
 );
 
+export const reminderInstances = sqliteTable(
+  "reminder_instances",
+  {
+    id: text("id").primaryKey(),
+    reminderId: text("reminder_id").notNull(),
+    eventId: text("event_id").notNull(),
+    occurrenceDate: text("occurrence_date").notNull(),
+    occurrenceKey: text("occurrence_key").notNull(),
+    scheduledFor: text("scheduled_for").notNull(),
+    deliveredAt: text("delivered_at"),
+    seenAt: text("seen_at"),
+    snoozedUntil: text("snoozed_until"),
+    resolvedAt: text("resolved_at"),
+    state: text("state").notNull().default("scheduled"),
+    reason: text("reason").notNull(),
+    ruleLabel: text("rule_label").notNull(),
+    escalationLevel: integer("escalation_level").notNull().default(0),
+    nextEscalationAt: text("next_escalation_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("reminder_instance_occurrence_rule_idx").on(
+      table.reminderId,
+      table.occurrenceKey,
+    ),
+    index("reminder_instance_state_due_idx").on(
+      table.state,
+      table.scheduledFor,
+    ),
+    check(
+      "reminder_instance_state_check",
+      sql`${table.state} in ('scheduled', 'delivered', 'seen', 'snoozed', 'resolved', 'dismissed', 'expired')`,
+    ),
+  ],
+);
+
 export const timePreferences = sqliteTable("time_preferences", {
   id: text("id").primaryKey().default("default"),
   timeZone: text("time_zone").notNull().default("UTC"),
@@ -215,5 +253,22 @@ export const timePreferences = sqliteTable("time_preferences", {
   notificationPermission: text("notification_permission")
     .notNull()
     .default("in-app-only"),
+  defaultView: text("default_view").notNull().default("day"),
+  defaultEventDurationMinutes: integer("default_event_duration_minutes")
+    .notNull()
+    .default(60),
+  transitionBufferMinutes: integer("transition_buffer_minutes")
+    .notNull()
+    .default(15),
+  morningBriefTime: text("morning_brief_time").notNull().default("07:00"),
+  eveningBriefTime: text("evening_brief_time").notNull().default("20:00"),
+  escalationEnabled: integer("escalation_enabled").notNull().default(1),
+  defaultSnoozeMinutes: integer("default_snooze_minutes").notNull().default(60),
+  overloadMinutesPerDay: integer("overload_minutes_per_day")
+    .notNull()
+    .default(480),
+  overloadImportantItemCount: integer("overload_important_item_count")
+    .notNull()
+    .default(5),
   updatedAt: text("updated_at").notNull(),
 });

@@ -35,6 +35,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { CalendarToday } from "./CalendarToday";
+import {
+  BirthdayPlanner,
+  BillPlanner,
+  CalendarBriefDialog,
+  CalendarSignals,
+  MonthView,
+  ReminderCenter,
+  RescueDialog,
+  type RescueDecision,
+} from "./CalendarPhaseTwo";
 import { AppShell } from "../shell/AppShell";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -61,7 +72,6 @@ import {
   addDays,
   dateRange,
   endOfWeek,
-  isInQuietHours,
   localDateInZone,
   localTimeInZone,
   recurrenceLabel,
@@ -81,12 +91,28 @@ import type {
   TimeArea,
   TimePreferences,
 } from "../../lib/time/types";
+import {
+  CALENDAR_EVENT_TYPES,
+  eventIsActionable,
+  eventTypeDefaults,
+  eventTypeLabel,
+} from "../../lib/time/event-types";
+import { agendaSection, scheduleWarnings } from "../../lib/time/phase-two";
 
 type Editor =
-  | { type: "event"; item?: CalendarEvent; startTime?: string }
+  | {
+      type: "event";
+      item?: CalendarEvent;
+      startTime?: string;
+      defaultDate?: string;
+      presetType?: CalendarEvent["eventType"];
+    }
+  | { type: "event-detail"; item: CalendarEvent }
   | { type: "priority"; item?: Priority }
   | { type: "routine"; item?: Routine }
   | { type: "preferences" }
+  | { type: "brief"; mode: "morning" | "evening" }
+  | { type: "rescue" }
   | { type: "quick" }
   | null;
 
@@ -111,7 +137,12 @@ const defaultFilters: CalendarFilters = {
   includeEvents: true,
   includePriorities: true,
   includeRoutines: true,
-  includeCompleted: true,
+  includeCompleted: false,
+  eventTypes: [],
+  statuses: [],
+  priorities: [],
+  payment: "all",
+  recurrence: "all",
 };
 
 function detectedTimeZone() {
@@ -123,13 +154,21 @@ function todayKey() {
 }
 
 function initialArea(): TimeArea {
-  if (typeof window === "undefined") return "agenda";
+  if (typeof window === "undefined") return "day";
   const value = new URLSearchParams(window.location.search).get("view");
-  return ["agenda", "day", "week", "priorities", "routines"].includes(
-    value ?? "",
-  )
+  return [
+    "agenda",
+    "day",
+    "week",
+    "month",
+    "reminders",
+    "birthdays",
+    "bills",
+    "priorities",
+    "routines",
+  ].includes(value ?? "")
     ? (value as TimeArea)
-    : "agenda";
+    : "day";
 }
 
 function initialDate() {
@@ -176,29 +215,47 @@ function eventTime(event: CalendarEvent, hourCycle: "12" | "24") {
   )}`;
 }
 
+function compactDuration(milliseconds: number) {
+  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
+  const days = Math.floor(minutes / 1_440);
+  if (days) return `${days} day${days === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours && remainder) return `${hours} hr ${remainder} min`;
+  if (hours) return `${hours} hr`;
+  return `${minutes} min`;
+}
+
+function eventCountdown(event: CalendarEvent, now: Date) {
+  if (!event.startAt) return null;
+  const delta = Date.parse(event.startAt) - now.getTime();
+  if (delta <= 0 || delta > 14 * 24 * 60 * 60_000) return null;
+  return `Starts in ${compactDuration(delta)}`;
+}
+
 function areaRange(area: TimeArea, cursor: string, weekStartsOn: 0 | 1) {
-  if (area === "day") return { start: cursor, end: cursor };
+  if (area === "day") return { start: cursor, end: addDays(cursor, 14) };
   if (area === "week") {
     return {
       start: startOfWeek(cursor, weekStartsOn),
       end: endOfWeek(cursor, weekStartsOn),
     };
   }
-  if (area === "agenda") return { start: cursor, end: addDays(cursor, 13) };
+  if (area === "agenda") return { start: cursor, end: addDays(cursor, 29) };
+  if (area === "month") {
+    const start = startOfWeek(`${cursor.slice(0, 7)}-01`, weekStartsOn);
+    return { start, end: addDays(start, 41) };
+  }
+  if (area === "birthdays") return { start: cursor, end: addDays(cursor, 365) };
+  if (area === "bills")
+    return { start: addDays(cursor, -31), end: addDays(cursor, 62) };
+  if (area === "reminders")
+    return { start: addDays(cursor, -30), end: addDays(cursor, 60) };
   return { start: addDays(cursor, -30), end: addDays(cursor, 60) };
 }
 
 function eventOverlapsDate(event: CalendarEvent, date: string) {
   return event.localDate <= date && event.endLocalDate >= date;
-}
-
-function currentTimePosition(now: Date, timeZone: string) {
-  const [hour, minute] = localTimeInZone(now, timeZone).split(":").map(Number);
-  const minutes = hour * 60 + minute;
-  const gridStart = 6 * 60;
-  const gridEnd = 23 * 60;
-  if (minutes < gridStart || minutes > gridEnd) return null;
-  return ((minutes - gridStart) / (gridEnd - gridStart)) * 100;
 }
 
 export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
@@ -277,22 +334,31 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
 
   useEffect(() => {
     const updateConnection = () => setOffline(!navigator.onLine);
-    const updateNow = () => setNow(new Date());
     const pop = () => {
       setArea(initialArea());
       setCursor(initialDate());
+    };
+    const reconcile = () => {
+      if (document.visibilityState === "visible") void load(false);
     };
     updateConnection();
     window.addEventListener("online", updateConnection);
     window.addEventListener("offline", updateConnection);
     window.addEventListener("popstate", pop);
-    const timer = window.setInterval(updateNow, 60_000);
+    window.addEventListener("focus", reconcile);
+    document.addEventListener("visibilitychange", reconcile);
     return () => {
       window.removeEventListener("online", updateConnection);
       window.removeEventListener("offline", updateConnection);
       window.removeEventListener("popstate", pop);
-      window.clearInterval(timer);
+      window.removeEventListener("focus", reconcile);
+      document.removeEventListener("visibilitychange", reconcile);
     };
+  }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const navigateTo = (nextArea: TimeArea, nextDate = cursor) => {
@@ -305,7 +371,8 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
   };
 
   const stepDate = (direction: -1 | 1) => {
-    const amount = area === "week" ? 7 : area === "agenda" ? 14 : 1;
+    const amount =
+      area === "week" ? 7 : area === "agenda" ? 30 : area === "month" ? 35 : 1;
     navigateTo(area, addDays(cursor, direction * amount));
   };
 
@@ -368,6 +435,152 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
 
   const requestDeleteEvent = (item: CalendarEvent) => {
     setScopeAction({ kind: "delete", item });
+  };
+
+  const changeEvent = async (
+    item: CalendarEvent,
+    update: Partial<CalendarEventInput>,
+  ) => {
+    if (offline) {
+      notify("Offline. The event was not changed.");
+      return;
+    }
+    try {
+      await api.updateEvent(
+        item.id,
+        item.occurrenceDate,
+        item.seriesId ? "occurrence" : "series",
+        {
+          ...item,
+          ...update,
+          paidAt:
+            update.paymentStatus === "paid"
+              ? new Date().toISOString()
+              : update.paymentStatus === "unpaid"
+                ? null
+                : item.paidAt,
+        },
+      );
+      setEditor(null);
+      notify(
+        update.paymentStatus === "paid"
+          ? "Bill marked paid."
+          : update.status === "completed"
+            ? "Event completed."
+            : update.status === "dismissed"
+              ? "Event dismissed."
+              : "Event updated.",
+      );
+      await refresh();
+    } catch (changeError) {
+      notify(
+        changeError instanceof Error
+          ? changeError.message
+          : "The event was not changed.",
+      );
+    }
+  };
+
+  const changeReminder = async (
+    reminder: CalendarPayload["reminderInstances"][number],
+    action: "seen" | "snooze" | "resolve" | "dismiss",
+    snoozedUntil?: string,
+  ) => {
+    try {
+      await api.updateReminder(reminder.id, action, snoozedUntil);
+      notify(
+        action === "snooze"
+          ? "Reminder snoozed."
+          : action === "dismiss"
+            ? "Reminder dismissed."
+            : "Reminder updated.",
+      );
+      await refresh();
+    } catch (reminderError) {
+      notify(
+        reminderError instanceof Error
+          ? reminderError.message
+          : "The reminder was not changed.",
+      );
+    }
+  };
+
+  const applyRescue = async (decisions: RescueDecision[]) => {
+    const snapshots = decisions.map(({ event }) => ({ ...event }));
+    const move = (event: CalendarEvent, action: RescueDecision["action"]) => {
+      const today = localDateInZone(new Date(), event.timeZone);
+      const targetDate = action === "tomorrow" ? addDays(today, 1) : today;
+      const targetTime =
+        action === "now"
+          ? localTimeInZone(new Date(), event.timeZone)
+          : action === "later"
+            ? "18:00"
+            : event.startTime;
+      const duration =
+        event.startAt && event.endAt
+          ? Math.max(
+              15,
+              Math.round(
+                (Date.parse(event.endAt) - Date.parse(event.startAt)) / 60_000,
+              ),
+            )
+          : (data?.preferences.defaultEventDurationMinutes ?? 60);
+      const [hour, minute] = (targetTime ?? "09:00").split(":").map(Number);
+      const endMinutes = hour * 60 + minute + duration;
+      const endDate = endMinutes >= 1_440 ? addDays(targetDate, 1) : targetDate;
+      const endTime = `${String(Math.floor((endMinutes % 1_440) / 60)).padStart(
+        2,
+        "0",
+      )}:${String(endMinutes % 60).padStart(2, "0")}`;
+      return {
+        ...event,
+        status: "scheduled" as const,
+        localDate: targetDate,
+        endLocalDate: endDate,
+        startTime: targetTime,
+        endTime,
+      };
+    };
+    try {
+      await Promise.all(
+        decisions.map(({ event, action }) =>
+          api.updateEvent(
+            event.id,
+            event.occurrenceDate,
+            event.seriesId ? "occurrence" : "series",
+            action === "complete"
+              ? { ...event, status: "completed" }
+              : action === "dismiss"
+                ? { ...event, status: "dismissed" }
+                : move(event, action),
+          ),
+        ),
+      );
+      setEditor(null);
+      notify("The repair plan was applied.", {
+        actionLabel: "Undo",
+        onAction: () => {
+          void Promise.all(
+            snapshots.map((event) =>
+              api.updateEvent(
+                event.id,
+                event.occurrenceDate,
+                event.seriesId ? "occurrence" : "series",
+                event,
+              ),
+            ),
+          ).then(() => refresh());
+        },
+      });
+      await refresh();
+    } catch (rescueError) {
+      notify(
+        rescueError instanceof Error
+          ? `${rescueError.message} Review the remaining items before retrying.`
+          : "The repair plan was not fully applied.",
+      );
+      await refresh();
+    }
   };
 
   const applyScope = async (scope: RecurrenceEditScope) => {
@@ -452,16 +665,7 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
       notify("Priority removed.", {
         actionLabel: "Undo",
         onAction: async () => {
-          await api.createPriority({
-            title: item.title,
-            notes: item.notes,
-            dueAt: item.dueAt,
-            isTop: item.isTop,
-            scheduledStartAt: item.scheduledStartAt,
-            scheduledEndAt: item.scheduledEndAt,
-            reminderEnabled: item.reminderEnabled,
-            reminderOffsetMinutes: item.reminderOffsetMinutes,
-          });
+          await api.updatePriority(item.id, { archived: false });
           await refresh();
         },
       });
@@ -609,18 +813,31 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
           range={range}
           refreshing={refreshing}
           sourceLabel={data?.sourceLabel}
+          reminderCount={
+            data?.reminderInstances.filter((item) =>
+              ["delivered", "seen", "escalated"].includes(item.state),
+            ).length ?? 0
+          }
           onArea={(next) => navigateTo(next)}
           onPrevious={() => stepDate(-1)}
           onNext={() => stepDate(1)}
           onToday={() => navigateTo(area, todayKey())}
           onRefresh={() => void refresh()}
-          onAdd={() => setEditor({ type: "quick" })}
+          onAdd={() => setEditor({ type: "event" })}
           onPreferences={() => setEditor({ type: "preferences" })}
         />
 
         <TimeFilters filters={filters} onChange={setFilters} />
 
-        {data ? <ReminderNotice data={data} now={now} /> : null}
+        {data && area === "day" ? (
+          <CalendarSignals
+            data={data}
+            now={now}
+            onArea={(next) => navigateTo(next)}
+            onBrief={(mode) => setEditor({ type: "brief", mode })}
+            onRescue={() => setEditor({ type: "rescue" })}
+          />
+        ) : null}
 
         {error && !data ? (
           <Panel>
@@ -651,19 +868,39 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
                 cursor={cursor}
                 onEditEvent={(item) => setEditor({ type: "event", item })}
                 onDeleteEvent={requestDeleteEvent}
+                onStatus={(item, status) => void changeEvent(item, { status })}
+                onPayment={(item, paymentStatus) =>
+                  void changeEvent(item, {
+                    paymentStatus,
+                    status:
+                      paymentStatus === "paid" ? "completed" : "scheduled",
+                  })
+                }
                 onOccurrence={safelyChangeOccurrence}
                 onAdd={() => setEditor({ type: "event" })}
               />
             ) : null}
             {area === "day" ? (
-              <DayView
+              <CalendarToday
                 data={data}
                 date={cursor}
-                now={now}
-                onEditEvent={(item) => setEditor({ type: "event", item })}
-                onDeleteEvent={requestDeleteEvent}
+                onOpenEvent={(item) =>
+                  setEditor({ type: "event-detail", item })
+                }
+                onOpenPriority={(item) => setEditor({ type: "priority", item })}
+                onEventStatus={(item, status) =>
+                  void changeEvent(item, { status })
+                }
+                onPayment={(item, paymentStatus) =>
+                  void changeEvent(item, {
+                    paymentStatus,
+                    status:
+                      paymentStatus === "paid" ? "completed" : "scheduled",
+                  })
+                }
+                onReschedule={(item) => setEditor({ type: "event", item })}
                 onOccurrence={safelyChangeOccurrence}
-                onAddAt={(startTime) => setEditor({ type: "event", startTime })}
+                onAdd={() => setEditor({ type: "event" })}
               />
             ) : null}
             {area === "week" ? (
@@ -674,6 +911,76 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
                 onSelectDay={(date) => navigateTo("day", date)}
                 onEditEvent={(item) => setEditor({ type: "event", item })}
                 onOccurrence={safelyChangeOccurrence}
+                onAdd={(date) =>
+                  setEditor({ type: "event", defaultDate: date })
+                }
+              />
+            ) : null}
+            {area === "month" ? (
+              <MonthView
+                data={data}
+                selectedDate={cursor}
+                onSelectDate={(date) => navigateTo("month", date)}
+                onOpenEvent={(item) =>
+                  setEditor({ type: "event-detail", item })
+                }
+                onAdd={(date) =>
+                  setEditor({ type: "event", defaultDate: date })
+                }
+              />
+            ) : null}
+            {area === "reminders" ? (
+              <ReminderCenter
+                data={data}
+                now={now}
+                onOpen={(item) => setEditor({ type: "event-detail", item })}
+                onStatus={(item, status) => void changeEvent(item, { status })}
+                onPayment={(item, paymentStatus) =>
+                  void changeEvent(item, {
+                    paymentStatus,
+                    status:
+                      paymentStatus === "paid" ? "completed" : "scheduled",
+                  })
+                }
+                onReschedule={(item) => setEditor({ type: "event", item })}
+                onReminder={(item, action, snoozedUntil) =>
+                  void changeReminder(item, action, snoozedUntil)
+                }
+              />
+            ) : null}
+            {area === "birthdays" ? (
+              <BirthdayPlanner
+                data={data}
+                date={cursor}
+                onOpen={(item) => setEditor({ type: "event", item })}
+                onAdd={(date) =>
+                  setEditor({
+                    type: "event",
+                    defaultDate: date,
+                    presetType: "birthday",
+                  })
+                }
+              />
+            ) : null}
+            {area === "bills" ? (
+              <BillPlanner
+                data={data}
+                date={cursor}
+                onOpen={(item) => setEditor({ type: "event-detail", item })}
+                onPayment={(item, paymentStatus) =>
+                  void changeEvent(item, {
+                    paymentStatus,
+                    status:
+                      paymentStatus === "paid" ? "completed" : "scheduled",
+                  })
+                }
+                onAdd={(date) =>
+                  setEditor({
+                    type: "event",
+                    defaultDate: date,
+                    presetType: "financial",
+                  })
+                }
               />
             ) : null}
             {area === "priorities" ? (
@@ -718,13 +1025,38 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
         }
         open={editor?.type === "event"}
         item={editor?.type === "event" ? editor.item : undefined}
-        defaultDate={cursor}
+        defaultDate={
+          editor?.type === "event" ? (editor.defaultDate ?? cursor) : cursor
+        }
         defaultStartTime={
           editor?.type === "event" ? editor.startTime : undefined
+        }
+        presetType={editor?.type === "event" ? editor.presetType : undefined}
+        defaultDurationMinutes={
+          data?.preferences.defaultEventDurationMinutes ?? 60
         }
         timeZone={data?.preferences.timeZone ?? detectedTimeZone()}
         onClose={() => setEditor(null)}
         onSave={requestSaveEvent}
+      />
+      <EventDetailDialog
+        item={editor?.type === "event-detail" ? editor.item : null}
+        hourCycle={data?.preferences.hourCycle ?? "12"}
+        now={now}
+        onClose={() => setEditor(null)}
+        onEdit={(item) => setEditor({ type: "event", item })}
+        onReschedule={(item) => setEditor({ type: "event", item })}
+        onStatus={(item, status) => void changeEvent(item, { status })}
+        onPayment={(item, paymentStatus) =>
+          void changeEvent(item, {
+            paymentStatus,
+            status: paymentStatus === "paid" ? "completed" : "scheduled",
+          })
+        }
+        onDelete={(item) => {
+          setEditor(null);
+          requestDeleteEvent(item);
+        }}
       />
       <PriorityEditor
         key={
@@ -755,6 +1087,21 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
         preferences={data?.preferences}
         onClose={() => setEditor(null)}
         onSave={savePreferences}
+      />
+      <CalendarBriefDialog
+        mode={editor?.type === "brief" ? editor.mode : null}
+        data={data}
+        now={now}
+        onClose={() => setEditor(null)}
+        onOpen={(item) => setEditor({ type: "event-detail", item })}
+        onStatus={(item, status) => void changeEvent(item, { status })}
+      />
+      <RescueDialog
+        open={editor?.type === "rescue"}
+        data={data}
+        now={now}
+        onClose={() => setEditor(null)}
+        onApply={applyRescue}
       />
       <ScopeDialog
         action={scopeAction}
@@ -805,6 +1152,7 @@ function TimeHeader({
   range,
   refreshing,
   sourceLabel,
+  reminderCount,
   onArea,
   onPrevious,
   onNext,
@@ -818,6 +1166,7 @@ function TimeHeader({
   range: { start: string; end: string };
   refreshing: boolean;
   sourceLabel?: string;
+  reminderCount: number;
   onArea(area: TimeArea): void;
   onPrevious(): void;
   onNext(): void;
@@ -826,7 +1175,7 @@ function TimeHeader({
   onAdd(): void;
   onPreferences(): void;
 }) {
-  const title =
+  const dateLabel =
     area === "week"
       ? `${formatDate(range.start, {
           month: "short",
@@ -841,12 +1190,13 @@ function TimeHeader({
     <header className="time-header">
       <div className="time-header__title">
         <p className="eyebrow">Personal time</p>
-        <h1>{title}</h1>
+        <h1>Calendar</h1>
         <p>
-          {sourceLabel ?? "Private local workspace"} · External sync not
-          connected
+          {dateLabel} · {sourceLabel ?? "Private local workspace"} · External
+          sync not connected
         </p>
       </div>
+      <LiveClock />
       <div className="time-header__actions">
         <Button
           variant="icon"
@@ -867,16 +1217,44 @@ function TimeHeader({
           icon={<Plus aria-hidden="true" />}
           onClick={onAdd}
         >
-          Add
+          Quick Add
         </Button>
       </div>
       <div className="time-toolbar">
         <div className="view-switcher" role="group" aria-label="Time views">
           {(
             [
+              ["day", "Today", Clock3],
               ["agenda", "Agenda", List],
-              ["day", "Day", Clock3],
               ["week", "Week", CalendarDays],
+              ["month", "Month", CalendarClock],
+            ] as const
+          ).map(([value, label, Icon]) => (
+            <button
+              key={value}
+              className={area === value ? "is-active" : ""}
+              aria-pressed={area === value}
+              onClick={() => onArea(value)}
+            >
+              <Icon aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+        <div
+          className="view-switcher view-switcher--secondary"
+          role="group"
+          aria-label="Planning workspaces"
+        >
+          {(
+            [
+              [
+                "reminders",
+                `Reminders${reminderCount ? ` ${reminderCount}` : ""}`,
+                Bell,
+              ],
+              ["birthdays", "Birthdays", CalendarDays],
+              ["bills", "Bills", CalendarClock],
               ["priorities", "Priorities", CheckCircle2],
               ["routines", "Routines", Repeat2],
             ] as const
@@ -914,6 +1292,23 @@ function TimeHeader({
   );
 }
 
+function LiveClock() {
+  const [time, setTime] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setTime(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <div
+      className="live-time"
+      aria-label={`Current time ${formatTime(time.toISOString())}`}
+    >
+      <Clock3 aria-hidden="true" />
+      <span>{formatTime(time.toISOString())}</span>
+    </div>
+  );
+}
+
 function TimeFilters({
   filters,
   onChange,
@@ -921,6 +1316,43 @@ function TimeFilters({
   filters: CalendarFilters;
   onChange(filters: CalendarFilters): void;
 }) {
+  const [query, setQuery] = useState(filters.query);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (query !== filters.query) onChange({ ...filters, query });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [filters, onChange, query]);
+  const activeCount =
+    Number(Boolean(filters.query)) +
+    Number(!filters.includeEvents) +
+    Number(!filters.includePriorities) +
+    Number(!filters.includeRoutines) +
+    Number(filters.includeCompleted) +
+    filters.eventTypes.length +
+    filters.statuses.length +
+    filters.priorities.length +
+    Number(filters.payment !== "all") +
+    Number(filters.recurrence !== "all");
+  const toggleList = <T extends string>(values: T[], value: T) =>
+    values.includes(value)
+      ? values.filter((item) => item !== value)
+      : [...values, value];
+  const preset = (
+    value: "birthday" | "financial" | "medical" | "unresolved" | "recurring",
+  ) => {
+    setQuery("");
+    onChange({
+      ...defaultFilters,
+      eventTypes:
+        value === "birthday" || value === "financial" || value === "medical"
+          ? [value]
+          : [],
+      statuses: value === "unresolved" ? ["scheduled"] : [],
+      payment: value === "unresolved" ? "unpaid" : "all",
+      recurrence: value === "recurring" ? "recurring" : "all",
+    });
+  };
   return (
     <div className="time-filters">
       <label className="search-field">
@@ -928,17 +1360,30 @@ function TimeFilters({
         <Search aria-hidden="true" />
         <input
           type="search"
-          value={filters.query}
-          onChange={(event) =>
-            onChange({ ...filters, query: event.target.value })
-          }
-          placeholder="Search events, priorities, and routines"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search title, notes, provider, amount…"
         />
       </label>
+      <div className="filter-presets" aria-label="Filter presets">
+        {(
+          [
+            ["birthday", "Birthdays"],
+            ["financial", "Bills"],
+            ["medical", "Medical"],
+            ["unresolved", "Unresolved"],
+            ["recurring", "Recurring"],
+          ] as const
+        ).map(([value, label]) => (
+          <button key={value} onClick={() => preset(value)}>
+            {label}
+          </button>
+        ))}
+      </div>
       <details className="filter-menu">
         <summary>
           <Filter aria-hidden="true" />
-          Filters
+          Filters{activeCount ? ` · ${activeCount}` : ""}
         </summary>
         <div className="filter-menu__surface">
           {(
@@ -946,7 +1391,7 @@ function TimeFilters({
               ["includeEvents", "Events"],
               ["includePriorities", "Priorities"],
               ["includeRoutines", "Routines"],
-              ["includeCompleted", "Completed and canceled"],
+              ["includeCompleted", "Completed, dismissed, and cancelled"],
             ] as const
           ).map(([key, label]) => (
             <label key={key}>
@@ -960,92 +1405,104 @@ function TimeFilters({
               <span>{label}</span>
             </label>
           ))}
+          <fieldset>
+            <legend>Event type</legend>
+            {Object.keys(CALENDAR_EVENT_TYPES).map((value) => (
+              <label key={value}>
+                <input
+                  type="checkbox"
+                  checked={filters.eventTypes.includes(
+                    value as CalendarEvent["eventType"],
+                  )}
+                  onChange={() =>
+                    onChange({
+                      ...filters,
+                      eventTypes: toggleList(
+                        filters.eventTypes,
+                        value as CalendarEvent["eventType"],
+                      ),
+                    })
+                  }
+                />
+                <span>
+                  {eventTypeLabel(value as CalendarEvent["eventType"])}
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <fieldset>
+            <legend>Status</legend>
+            {["scheduled", "completed", "dismissed", "cancelled"].map(
+              (value) => (
+                <label key={value}>
+                  <input
+                    type="checkbox"
+                    checked={filters.statuses.includes(
+                      value as CalendarEvent["status"],
+                    )}
+                    onChange={() =>
+                      onChange({
+                        ...filters,
+                        statuses: toggleList(
+                          filters.statuses,
+                          value as CalendarEvent["status"],
+                        ),
+                      })
+                    }
+                  />
+                  <span>{value}</span>
+                </label>
+              ),
+            )}
+          </fieldset>
+          <div className="form-row">
+            <label>
+              <span>Payment</span>
+              <select
+                value={filters.payment}
+                onChange={(event) =>
+                  onChange({
+                    ...filters,
+                    payment: event.target.value as CalendarFilters["payment"],
+                  })
+                }
+              >
+                <option value="all">All</option>
+                <option value="unpaid">Unpaid</option>
+                <option value="paid">Paid</option>
+              </select>
+            </label>
+            <label>
+              <span>Recurrence</span>
+              <select
+                value={filters.recurrence}
+                onChange={(event) =>
+                  onChange({
+                    ...filters,
+                    recurrence: event.target
+                      .value as CalendarFilters["recurrence"],
+                  })
+                }
+              >
+                <option value="all">All</option>
+                <option value="recurring">Recurring</option>
+                <option value="one-time">One-time</option>
+              </select>
+            </label>
+          </div>
+          {activeCount ? (
+            <Button
+              variant="tertiary"
+              onClick={() => {
+                setQuery("");
+                onChange(defaultFilters);
+              }}
+            >
+              Reset filters
+            </Button>
+          ) : null}
         </div>
       </details>
-    </div>
-  );
-}
-
-function ReminderNotice({ data, now }: { data: CalendarPayload; now: Date }) {
-  const due = data.reminders
-    .filter((reminder) => reminder.enabled)
-    .map((reminder) => {
-      if (reminder.entityType === "event") {
-        const event = data.events.find(
-          (item) => item.id === reminder.entityId && item.startAt,
-        );
-        return {
-          label: event?.title ?? "",
-          trigger: event?.startAt
-            ? new Date(
-                Date.parse(event.startAt) - reminder.offsetMinutes * 60_000,
-              )
-            : null,
-        };
-      }
-      if (reminder.entityType === "priority") {
-        const priority = data.priorities.find(
-          (item) => item.id === reminder.entityId,
-        );
-        return {
-          label: priority?.title ?? "",
-          trigger: priority?.dueAt
-            ? new Date(
-                Date.parse(priority.dueAt) - reminder.offsetMinutes * 60_000,
-              )
-            : null,
-        };
-      }
-      const routine = data.routines.find(
-        (item) => item.id === reminder.entityId,
-      );
-      const occurrence = data.occurrences.find(
-        (item) =>
-          item.routineId === reminder.entityId &&
-          item.scheduledAt &&
-          !["completed", "skipped"].includes(item.status),
-      );
-      return {
-        label: routine?.name ?? "",
-        trigger: occurrence?.scheduledAt
-          ? new Date(
-              Date.parse(occurrence.scheduledAt) -
-                reminder.offsetMinutes * 60_000,
-            )
-          : null,
-      };
-    })
-    .filter(
-      (entry) =>
-        entry.trigger &&
-        now.getTime() >= entry.trigger.getTime() &&
-        now.getTime() - entry.trigger.getTime() < 60 * 60_000,
-    );
-  if (!due.length && data.preferences.notificationPermission !== "denied")
-    return null;
-  const quiet = isInQuietHours(
-    localTimeInZone(now, data.preferences.timeZone),
-    data.preferences,
-  );
-  return (
-    <div className="reminder-notice" role="status">
-      <Bell aria-hidden="true" />
-      <div>
-        <strong>
-          {data.preferences.notificationPermission === "denied"
-            ? "Device notifications are unavailable"
-            : quiet && data.preferences.quietBehavior !== "allow"
-              ? "A reminder falls within quiet hours"
-              : `${due.length} in-app reminder${due.length === 1 ? "" : "s"} due`}
-        </strong>
-        <p>
-          {data.preferences.notificationPermission === "denied"
-            ? "Nexus will continue to show in-app reminders without claiming a system notification was delivered."
-            : quiet
-              ? `Quiet hours are active. The configured behavior is ${data.preferences.quietBehavior}.`
-              : due.map((entry) => entry.label).join(", ")}
-        </p>
-      </div>
     </div>
   );
 }
@@ -1055,6 +1512,8 @@ function AgendaView({
   cursor,
   onEditEvent,
   onDeleteEvent,
+  onStatus,
+  onPayment,
   onOccurrence,
   onAdd,
 }: {
@@ -1062,6 +1521,8 @@ function AgendaView({
   cursor: string;
   onEditEvent(event: CalendarEvent): void;
   onDeleteEvent(event: CalendarEvent): void;
+  onStatus(event: CalendarEvent, status: CalendarEvent["status"]): void;
+  onPayment(event: CalendarEvent, status: "paid" | "unpaid"): void;
   onOccurrence(
     occurrence: RoutineOccurrence,
     status: "due" | "completed" | "skipped",
@@ -1114,6 +1575,7 @@ function AgendaView({
         );
         const empty =
           !events.length && !occurrences.length && !priorities.length;
+        if (empty) return null;
         return (
           <section
             key={date}
@@ -1123,10 +1585,10 @@ function AgendaView({
             <header>
               <div>
                 <p className="eyebrow">
-                  {date ===
-                  localDateInZone(new Date(), data.preferences.timeZone)
-                    ? "Today"
-                    : "Personal schedule"}
+                  {agendaSection(
+                    date,
+                    localDateInZone(new Date(), data.preferences.timeZone),
+                  )}
                 </p>
                 <h2 id={`agenda-${date}`}>{formatDate(date)}</h2>
               </div>
@@ -1136,50 +1598,45 @@ function AgendaView({
                   : `${events.length + occurrences.length + priorities.length} items`}
               </span>
             </header>
-            {empty ? (
-              <p className="agenda-day__empty">
-                No commitments. Keep the space open or add something
-                intentional.
-              </p>
-            ) : (
-              <ol className="agenda-items">
-                {events.map((event) => (
-                  <li key={event.occurrenceKey}>
-                    <EventCard
-                      event={event}
-                      hourCycle={hourCycle}
-                      onEdit={() => onEditEvent(event)}
-                      onDelete={() => onDeleteEvent(event)}
-                    />
-                  </li>
-                ))}
-                {occurrences.map((occurrence) => (
-                  <li key={`${occurrence.routineId}-${date}`}>
-                    <OccurrenceCard
-                      occurrence={occurrence}
-                      hourCycle={hourCycle}
-                      onChange={(status) => onOccurrence(occurrence, status)}
-                    />
-                  </li>
-                ))}
-                {priorities.map((priority) => (
-                  <li key={priority.id}>
-                    <div className="agenda-priority">
-                      <CheckCircle2 aria-hidden="true" />
-                      <div>
-                        <strong>{priority.title}</strong>
-                        <span>
-                          Priority due · {formatTime(priority.dueAt, hourCycle)}
-                        </span>
-                      </div>
-                      {priority.isTop ? (
-                        <Badge tone="gold">Top three</Badge>
-                      ) : null}
+            <ol className="agenda-items">
+              {events.map((event) => (
+                <li key={event.occurrenceKey}>
+                  <EventCard
+                    event={event}
+                    hourCycle={hourCycle}
+                    onEdit={() => onEditEvent(event)}
+                    onDelete={() => onDeleteEvent(event)}
+                    onStatus={(status) => onStatus(event, status)}
+                    onPayment={(status) => onPayment(event, status)}
+                  />
+                </li>
+              ))}
+              {occurrences.map((occurrence) => (
+                <li key={`${occurrence.routineId}-${date}`}>
+                  <OccurrenceCard
+                    occurrence={occurrence}
+                    hourCycle={hourCycle}
+                    onChange={(status) => onOccurrence(occurrence, status)}
+                  />
+                </li>
+              ))}
+              {priorities.map((priority) => (
+                <li key={priority.id}>
+                  <div className="agenda-priority">
+                    <CheckCircle2 aria-hidden="true" />
+                    <div>
+                      <strong>{priority.title}</strong>
+                      <span>
+                        Priority due · {formatTime(priority.dueAt, hourCycle)}
+                      </span>
                     </div>
-                  </li>
-                ))}
-              </ol>
-            )}
+                    {priority.isTop ? (
+                      <Badge tone="gold">Top three</Badge>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
           </section>
         );
       })}
@@ -1192,11 +1649,15 @@ function EventCard({
   hourCycle,
   onEdit,
   onDelete,
+  onStatus,
+  onPayment,
 }: {
   event: CalendarEvent;
   hourCycle: "12" | "24";
   onEdit(): void;
   onDelete(): void;
+  onStatus?(status: CalendarEvent["status"]): void;
+  onPayment?(status: "paid" | "unpaid"): void;
 }) {
   return (
     <article
@@ -1213,8 +1674,8 @@ function EventCard({
               <Repeat2 aria-hidden="true" /> Recurring
             </span>
           ) : null}
-          {event.status !== "confirmed" ? (
-            <Badge tone={event.status === "canceled" ? "danger" : "neutral"}>
+          {event.status !== "scheduled" ? (
+            <Badge tone={event.status === "cancelled" ? "danger" : "neutral"}>
               {event.status}
             </Badge>
           ) : null}
@@ -1230,6 +1691,17 @@ function EventCard({
         ) : null}
       </div>
       <div className="item-actions">
+        {event.eventType === "financial" &&
+        event.paymentStatus !== "paid" &&
+        onPayment ? (
+          <Button variant="tertiary" onClick={() => onPayment("paid")}>
+            Mark paid
+          </Button>
+        ) : event.status === "scheduled" && onStatus ? (
+          <Button variant="tertiary" onClick={() => onStatus("completed")}>
+            Complete
+          </Button>
+        ) : null}
         <Button
           variant="icon"
           aria-label={`Edit ${event.title}`}
@@ -1311,175 +1783,6 @@ function OccurrenceCard({
   );
 }
 
-function DayView({
-  data,
-  date,
-  now,
-  onEditEvent,
-  onDeleteEvent,
-  onOccurrence,
-  onAddAt,
-}: {
-  data: CalendarPayload;
-  date: string;
-  now: Date;
-  onEditEvent(event: CalendarEvent): void;
-  onDeleteEvent(event: CalendarEvent): void;
-  onOccurrence(
-    occurrence: RoutineOccurrence,
-    status: "due" | "completed" | "skipped",
-  ): void;
-  onAddAt(time: string): void;
-}) {
-  const events = data.events.filter((event) => eventOverlapsDate(event, date));
-  const allDay = events.filter((event) => event.allDay);
-  const timed = events.filter((event) => !event.allDay);
-  const occurrences = data.occurrences.filter(
-    (occurrence) => occurrence.scheduledDate === date,
-  );
-  const priorities = data.priorities.filter(
-    (priority) =>
-      priority.status === "active" &&
-      priority.dueAt &&
-      localDateInZone(priority.dueAt, data.preferences.timeZone) === date,
-  );
-  const current =
-    date === localDateInZone(now, data.preferences.timeZone)
-      ? currentTimePosition(now, data.preferences.timeZone)
-      : null;
-  const hours = Array.from({ length: 17 }, (_, index) => index + 6);
-  return (
-    <div className="day-view">
-      <Panel className="all-day-panel">
-        <SectionHeader eyebrow="All day" title={formatDate(date)} />
-        {allDay.length ? (
-          <div className="all-day-list">
-            {allDay.map((event) => (
-              <EventCard
-                key={event.occurrenceKey}
-                event={event}
-                hourCycle={data.preferences.hourCycle}
-                onEdit={() => onEditEvent(event)}
-                onDelete={() => onDeleteEvent(event)}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="surface-note">No all-day commitments.</p>
-        )}
-      </Panel>
-      <section
-        className="time-grid"
-        aria-label={`Schedule for ${formatDate(date)}`}
-      >
-        {current !== null ? (
-          <div
-            className="current-time-line"
-            style={{ top: `${current}%` }}
-            aria-label={`Current time ${formatTime(now.toISOString(), data.preferences.hourCycle)}`}
-          >
-            <span />
-          </div>
-        ) : null}
-        {hours.map((hour) => {
-          const time = `${String(hour).padStart(2, "0")}:00`;
-          const items = timed.filter(
-            (event) =>
-              event.startAt &&
-              Number(
-                localTimeInZone(event.startAt, data.preferences.timeZone).slice(
-                  0,
-                  2,
-                ),
-              ) === hour,
-          );
-          const routines = occurrences.filter(
-            (occurrence) =>
-              occurrence.scheduledAt &&
-              Number(
-                localTimeInZone(
-                  occurrence.scheduledAt,
-                  data.preferences.timeZone,
-                ).slice(0, 2),
-              ) === hour,
-          );
-          const duePriorities = priorities.filter(
-            (priority) =>
-              priority.dueAt &&
-              Number(
-                localTimeInZone(
-                  priority.dueAt,
-                  data.preferences.timeZone,
-                ).slice(0, 2),
-              ) === hour,
-          );
-          const overlap = items.length + routines.length > 1;
-          return (
-            <div className="time-row" key={hour}>
-              <button
-                className="time-row__label"
-                onClick={() => onAddAt(time)}
-                aria-label={`Add event at ${time}`}
-              >
-                {new Intl.DateTimeFormat(undefined, {
-                  hour: "numeric",
-                  hourCycle:
-                    data.preferences.hourCycle === "24" ? "h23" : "h12",
-                  timeZone: "UTC",
-                }).format(new Date(`2026-01-01T${time}:00Z`))}
-              </button>
-              <div
-                className={`time-row__content ${overlap ? "has-overlap" : ""}`}
-              >
-                {overlap ? (
-                  <span className="overlap-label">
-                    <AlertTriangle aria-hidden="true" />
-                    Overlap
-                  </span>
-                ) : null}
-                {items.map((event) => (
-                  <EventCard
-                    key={event.occurrenceKey}
-                    event={event}
-                    hourCycle={data.preferences.hourCycle}
-                    onEdit={() => onEditEvent(event)}
-                    onDelete={() => onDeleteEvent(event)}
-                  />
-                ))}
-                {routines.map((occurrence) => (
-                  <OccurrenceCard
-                    key={occurrence.id}
-                    occurrence={occurrence}
-                    hourCycle={data.preferences.hourCycle}
-                    onChange={(status) => onOccurrence(occurrence, status)}
-                  />
-                ))}
-                {duePriorities.map((priority) => (
-                  <article className="agenda-priority" key={priority.id}>
-                    <CheckCircle2 aria-hidden="true" />
-                    <div>
-                      <strong>{priority.title}</strong>
-                      <span>
-                        Priority due ·{" "}
-                        {formatTime(priority.dueAt, data.preferences.hourCycle)}
-                      </span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-        {!timed.length && !occurrences.length && !priorities.length ? (
-          <p className="time-grid__empty">
-            Your timed schedule is open. Select a time to add an event.
-          </p>
-        ) : null}
-      </section>
-    </div>
-  );
-}
-
 function WeekView({
   data,
   start,
@@ -1487,6 +1790,7 @@ function WeekView({
   onSelectDay,
   onEditEvent,
   onOccurrence,
+  onAdd,
 }: {
   data: CalendarPayload;
   start: string;
@@ -1497,74 +1801,101 @@ function WeekView({
     occurrence: RoutineOccurrence,
     status: "due" | "completed" | "skipped",
   ): void;
+  onAdd(date: string): void;
 }) {
+  const warnings = scheduleWarnings(
+    data.events,
+    data.preferences.transitionBufferMinutes,
+  );
   return (
-    <div className="week-view" role="list" aria-label="Week schedule">
-      {dateRange(start, end).map((date) => {
-        const events = data.events.filter((event) =>
-          eventOverlapsDate(event, date),
-        );
-        const occurrences = data.occurrences.filter(
-          (occurrence) => occurrence.scheduledDate === date,
-        );
-        return (
-          <section
-            key={date}
-            className={`week-day ${date === todayKey() ? "is-today" : ""}`}
-            role="listitem"
-          >
-            <button
-              className="week-day__header"
-              onClick={() => onSelectDay(date)}
-              aria-label={`Open ${formatDate(date)}`}
+    <>
+      {warnings.length ? (
+        <div className="week-warnings" role="status">
+          <AlertTriangle aria-hidden="true" />
+          <span>
+            {warnings.length} conflict or tight transition
+            {warnings.length === 1 ? "" : "s"} detected. {warnings[0].message}
+          </span>
+        </div>
+      ) : null}
+      <div className="week-view" role="list" aria-label="Week schedule">
+        {dateRange(start, end).map((date) => {
+          const events = data.events.filter((event) =>
+            eventOverlapsDate(event, date),
+          );
+          const occurrences = data.occurrences.filter(
+            (occurrence) => occurrence.scheduledDate === date,
+          );
+          return (
+            <section
+              key={date}
+              className={`week-day ${date === todayKey() ? "is-today" : ""}`}
+              role="listitem"
             >
-              <span>{formatDate(date, { weekday: "short" })}</span>
-              <strong>{Number(date.slice(8, 10))}</strong>
-            </button>
-            <div className="week-day__items">
-              {events.map((event) => (
-                <button
-                  key={event.occurrenceKey}
-                  className={`week-event ${event.allDay ? "is-all-day" : ""}`}
-                  onClick={() => onEditEvent(event)}
-                >
-                  <span>
-                    {event.allDay
-                      ? "All day"
-                      : formatTime(event.startAt, data.preferences.hourCycle)}
-                  </span>
-                  <strong>{event.title}</strong>
-                  {event.recurrence ? (
+              <button
+                className="week-day__header"
+                onClick={() => onSelectDay(date)}
+                aria-label={`Open ${formatDate(date)}`}
+              >
+                <span>{formatDate(date, { weekday: "short" })}</span>
+                <strong>{Number(date.slice(8, 10))}</strong>
+              </button>
+              <div className="week-day__items">
+                {date === todayKey() ? (
+                  <div className="week-now" aria-label="Current day">
+                    <span />
+                    Now
+                  </div>
+                ) : null}
+                {events.map((event) => (
+                  <button
+                    key={event.occurrenceKey}
+                    className={`week-event ${event.allDay ? "is-all-day" : ""}`}
+                    onClick={() => onEditEvent(event)}
+                  >
                     <span>
-                      <Repeat2 aria-hidden="true" /> Recurring
+                      {event.allDay
+                        ? "All day"
+                        : formatTime(event.startAt, data.preferences.hourCycle)}
                     </span>
-                  ) : null}
-                </button>
-              ))}
-              {occurrences.map((occurrence) => (
-                <div className="week-routine" key={occurrence.id}>
-                  <Repeat2 aria-hidden="true" />
-                  <span>{occurrence.routineName}</span>
-                  {occurrence.status === "completed" ? (
-                    <Check aria-label="Completed" />
-                  ) : (
-                    <button
-                      aria-label={`Complete ${occurrence.routineName}`}
-                      onClick={() => onOccurrence(occurrence, "completed")}
-                    >
-                      <Circle aria-hidden="true" />
-                    </button>
-                  )}
-                </div>
-              ))}
-              {!events.length && !occurrences.length ? (
-                <span className="week-day__empty">Open</span>
-              ) : null}
-            </div>
-          </section>
-        );
-      })}
-    </div>
+                    <strong>{event.title}</strong>
+                    {event.recurrence ? (
+                      <span>
+                        <Repeat2 aria-hidden="true" /> Recurring
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+                {occurrences.map((occurrence) => (
+                  <div className="week-routine" key={occurrence.id}>
+                    <Repeat2 aria-hidden="true" />
+                    <span>{occurrence.routineName}</span>
+                    {occurrence.status === "completed" ? (
+                      <Check aria-label="Completed" />
+                    ) : (
+                      <button
+                        aria-label={`Complete ${occurrence.routineName}`}
+                        onClick={() => onOccurrence(occurrence, "completed")}
+                      >
+                        <Circle aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {!events.length && !occurrences.length ? (
+                  <button
+                    className="week-day__empty"
+                    onClick={() => onAdd(date)}
+                  >
+                    Open · add time
+                  </button>
+                ) : null}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -2009,6 +2340,8 @@ function EventEditor({
   item,
   defaultDate,
   defaultStartTime,
+  presetType,
+  defaultDurationMinutes,
   timeZone,
   onClose,
   onSave,
@@ -2017,19 +2350,59 @@ function EventEditor({
   item?: CalendarEvent;
   defaultDate: string;
   defaultStartTime?: string;
+  presetType?: CalendarEvent["eventType"];
+  defaultDurationMinutes: number;
   timeZone: string;
   onClose(): void;
   onSave(input: CalendarEventInput, item?: CalendarEvent): void | Promise<void>;
 }) {
   const startTime = defaultStartTime ?? "09:00";
-  const startHour = Number(startTime.slice(0, 2));
-  const endTime = `${String(Math.min(startHour + 1, 23)).padStart(2, "0")}:${startTime.slice(3)}`;
+  const startMinutes =
+    Number(startTime.slice(0, 2)) * 60 + Number(startTime.slice(3));
+  const endMinutes = Math.min(startMinutes + defaultDurationMinutes, 1_439);
+  const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, "0")}:${String(endMinutes % 60).padStart(2, "0")}`;
+  const initialType = item?.eventType ?? presetType ?? "personal";
+  const initialDefaults = eventTypeDefaults(initialType);
+  const initialDay = Number(defaultDate.slice(8, 10));
+  const [initialYear, initialMonth] = defaultDate.split("-").map(Number);
+  const initialDaysInMonth = new Date(
+    Date.UTC(initialYear, initialMonth, 0),
+  ).getUTCDate();
   const [title, setTitle] = useState(item?.title ?? "");
+  const [eventType, setEventType] =
+    useState<CalendarEvent["eventType"]>(initialType);
   const [notes, setNotes] = useState(item?.notes ?? "");
   const [location, setLocation] = useState(item?.location ?? "");
-  const [category, setCategory] = useState(item?.category ?? "");
-  const [status, setStatus] = useState(item?.status ?? "confirmed");
-  const [allDay, setAllDay] = useState(item?.allDay ?? false);
+  const [provider, setProvider] = useState(item?.provider ?? "");
+  const [meetingUrl, setMeetingUrl] = useState(item?.meetingUrl ?? "");
+  const [amount, setAmount] = useState(
+    item?.amount === null || item?.amount === undefined
+      ? ""
+      : String(item.amount),
+  );
+  const [currency, setCurrency] = useState(item?.currency ?? "USD");
+  const [paymentStatus, setPaymentStatus] = useState<"unpaid" | "paid" | null>(
+    item?.paymentStatus ?? (initialType === "financial" ? "unpaid" : null),
+  );
+  const [relationship, setRelationship] = useState(item?.relationship ?? "");
+  const [birthYear, setBirthYear] = useState(
+    item?.birthYear ? String(item.birthYear) : "",
+  );
+  const [giftIdea, setGiftIdea] = useState(item?.giftIdea ?? "");
+  const [contactMethod, setContactMethod] = useState(item?.contactMethod ?? "");
+  const [billCategory, setBillCategory] = useState(item?.billCategory ?? "");
+  const [autopay, setAutopay] = useState(item?.autopay ?? false);
+  const [accountNote, setAccountNote] = useState(item?.accountNote ?? "");
+  const [escalationEnabled, setEscalationEnabled] = useState(
+    item?.escalationEnabled ?? false,
+  );
+  const [priority, setPriority] = useState<CalendarEvent["priority"]>(
+    item?.priority ?? "standard",
+  );
+  const [status, setStatus] = useState<CalendarEvent["status"]>(
+    item?.status ?? "scheduled",
+  );
+  const [allDay, setAllDay] = useState(item?.allDay ?? initialDefaults.allDay);
   const [localDate, setLocalDate] = useState(item?.localDate ?? defaultDate);
   const [endLocalDate, setEndLocalDate] = useState(
     item?.endLocalDate ?? defaultDate,
@@ -2041,23 +2414,67 @@ function EventEditor({
   const [zone, setZone] = useState(item?.timeZone ?? timeZone);
   const [frequency, setFrequency] = useState<
     "none" | RecurrenceRule["frequency"]
-  >(item?.recurrence?.frequency ?? "none");
-  const [interval, setInterval] = useState(item?.recurrence?.interval ?? 1);
-  const [weekdays, setWeekdays] = useState<number[]>(
-    item?.recurrence?.weekdays ?? [],
+  >(
+    item?.recurrence?.frequency ??
+      initialDefaults.recurrence?.frequency ??
+      "none",
   );
-  const [monthlyMode, setMonthlyMode] = useState<"date" | "relative">(
+  const [interval, setInterval] = useState(
+    item?.recurrence?.interval ?? initialDefaults.recurrence?.interval ?? 1,
+  );
+  const [weekdays, setWeekdays] = useState<number[]>(
+    item?.recurrence?.weekdays ?? initialDefaults.recurrence?.weekdays ?? [],
+  );
+  const [monthlyMode, setMonthlyMode] = useState<RecurrenceRule["monthlyMode"]>(
     item?.recurrence?.monthlyMode ?? "date",
   );
   const [until, setUntil] = useState(item?.recurrence?.until ?? "");
+  const [monthlyWeekday, setMonthlyWeekday] = useState(
+    item?.recurrence?.monthlyWeekday ??
+      new Date(`${defaultDate}T12:00:00Z`).getUTCDay(),
+  );
+  const [monthlyOrdinal, setMonthlyOrdinal] = useState<-1 | 1 | 2 | 3 | 4>(
+    item?.recurrence?.monthlyOrdinal ??
+      (initialDay + 7 > initialDaysInMonth
+        ? -1
+        : (Math.ceil(initialDay / 7) as 1 | 2 | 3 | 4)),
+  );
   const [count, setCount] = useState(
     item?.recurrence?.count ? String(item.recurrence.count) : "",
   );
-  const [reminder, setReminder] = useState(
-    String(item?.reminderOffsets[0] ?? ""),
+  const [reminders, setReminders] = useState<number[]>(
+    item?.reminderOffsets ?? initialDefaults.reminderOffsets,
   );
+  const [detailsOpen, setDetailsOpen] = useState(Boolean(item));
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+
+  const changeType = (type: CalendarEvent["eventType"]) => {
+    setEventType(type);
+    const defaults = eventTypeDefaults(type);
+    setAllDay(defaults.allDay);
+    setReminders(defaults.reminderOffsets);
+    setFrequency(defaults.recurrence?.frequency ?? "none");
+    setInterval(defaults.recurrence?.interval ?? 1);
+    setWeekdays(defaults.recurrence?.weekdays ?? []);
+    setMonthlyMode(defaults.recurrence?.monthlyMode ?? "date");
+    setPaymentStatus(type === "financial" ? "unpaid" : null);
+  };
+
+  const toggleReminder = (offset: number) => {
+    setReminders((current) => {
+      if (current.includes(offset)) {
+        setFormError("");
+        return current.filter((value) => value !== offset);
+      }
+      if (current.length >= 5) {
+        setFormError("Choose no more than five reminders.");
+        return current;
+      }
+      setFormError("");
+      return [...current, offset].sort((left, right) => left - right);
+    });
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -2079,14 +2496,40 @@ function EventEditor({
                   ? [new Date(`${localDate}T12:00:00Z`).getUTCDay()]
                   : [],
             monthlyMode,
+            monthlyWeekday:
+              frequency === "monthly" && monthlyMode === "relative"
+                ? monthlyWeekday
+                : null,
+            monthlyOrdinal:
+              frequency === "monthly" && monthlyMode === "relative"
+                ? monthlyOrdinal
+                : null,
             until: until || null,
             count: count === "" ? null : Number(count),
           };
     const input: CalendarEventInput = {
       title: title.trim(),
+      eventType,
       notes: notes.trim(),
       location: location.trim(),
-      category: category.trim() || null,
+      provider: provider.trim(),
+      meetingUrl: meetingUrl.trim(),
+      amount: amount === "" ? null : Number(amount),
+      currency: currency.trim().toUpperCase(),
+      paymentStatus,
+      relationship: relationship.trim(),
+      birthYear: birthYear === "" ? null : Number(birthYear),
+      giftIdea: giftIdea.trim(),
+      contactMethod: contactMethod.trim(),
+      billCategory: billCategory.trim(),
+      autopay,
+      accountNote: accountNote.trim(),
+      paidAt:
+        paymentStatus === "paid"
+          ? (item?.paidAt ?? new Date().toISOString())
+          : null,
+      escalationEnabled,
+      priority,
       status,
       allDay,
       localDate,
@@ -2095,7 +2538,7 @@ function EventEditor({
       endTime: allDay ? null : localEndTime,
       timeZone: zone,
       recurrence,
-      reminderOffsets: reminder === "" ? [] : [Number(reminder)],
+      reminderOffsets: reminders,
     };
     try {
       setSaving(true);
@@ -2118,7 +2561,7 @@ function EventEditor({
       description={
         item?.seriesId
           ? "After saving, choose whether the change applies to this event, future events, or the entire series."
-          : "Times use the selected event time zone. All-day dates stay fixed."
+          : "Capture the commitment first. Add secondary details only when they help."
       }
       onClose={onClose}
       footer={
@@ -2147,6 +2590,21 @@ function EventEditor({
             onChange={(event) => setTitle(event.target.value)}
             aria-describedby={formError ? "event-form-error" : undefined}
           />
+        </label>
+        <label>
+          <span>Event type</span>
+          <select
+            value={eventType}
+            onChange={(event) =>
+              changeType(event.target.value as CalendarEvent["eventType"])
+            }
+          >
+            {Object.entries(CALENDAR_EVENT_TYPES).map(([value, definition]) => (
+              <option key={value} value={value}>
+                {definition.label}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="form-row">
           <label>
@@ -2199,183 +2657,582 @@ function EventEditor({
             </label>
           </div>
         ) : null}
-        <label>
-          <span>Time zone</span>
-          <input
-            value={zone}
-            onChange={(event) => setZone(event.target.value)}
-          />
-        </label>
-        <div className="form-row">
-          <label>
-            <span>Location (optional)</span>
-            <input
-              value={location}
-              maxLength={240}
-              onChange={(event) => setLocation(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Personal category (optional)</span>
-            <input
-              value={category ?? ""}
-              maxLength={40}
-              onChange={(event) => setCategory(event.target.value)}
-            />
-          </label>
-        </div>
-        <label>
-          <span>Notes (optional)</span>
-          <textarea
-            value={notes}
-            maxLength={4000}
-            rows={3}
-            onChange={(event) => setNotes(event.target.value)}
-          />
-        </label>
-        <div className="form-row">
-          <label>
-            <span>Repeat</span>
-            <select
-              value={frequency}
-              onChange={(event) =>
-                setFrequency(
-                  event.target.value as "none" | RecurrenceRule["frequency"],
-                )
-              }
-            >
-              <option value="none">Does not repeat</option>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-              <option value="yearly">Yearly</option>
-            </select>
-          </label>
-          {frequency !== "none" ? (
+        <button
+          className="more-details-toggle"
+          type="button"
+          aria-expanded={detailsOpen}
+          onClick={() => setDetailsOpen((current) => !current)}
+        >
+          {detailsOpen ? "Hide details" : "More details"}
+          <ChevronRight aria-hidden="true" />
+        </button>
+        {detailsOpen ? (
+          <div className="event-details-fields">
             <label>
-              <span>Every</span>
+              <span>Time zone</span>
               <input
-                type="number"
-                min={1}
-                max={365}
-                value={interval}
-                onChange={(event) => setInterval(Number(event.target.value))}
+                value={zone}
+                onChange={(event) => setZone(event.target.value)}
               />
             </label>
-          ) : null}
-        </div>
-        {frequency === "weekly" ? (
-          <fieldset>
-            <legend>Selected weekdays</legend>
-            <div className="weekday-picker">
-              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                (label, index) => (
-                  <label key={label}>
+            <div className="form-row">
+              <label>
+                <span>Location (optional)</span>
+                <input
+                  value={location}
+                  maxLength={240}
+                  onChange={(event) => setLocation(event.target.value)}
+                />
+              </label>
+              {eventType === "medical" ? (
+                <label>
+                  <span>Provider (optional)</span>
+                  <input
+                    value={provider}
+                    maxLength={160}
+                    onChange={(event) => setProvider(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              {eventType === "meeting" ? (
+                <label>
+                  <span>Meeting link (optional)</span>
+                  <input
+                    type="url"
+                    value={meetingUrl}
+                    onChange={(event) => setMeetingUrl(event.target.value)}
+                  />
+                </label>
+              ) : null}
+            </div>
+            {eventType === "financial" ? (
+              <>
+                <div className="form-row">
+                  <label>
+                    <span>Amount (optional)</span>
                     <input
-                      type="checkbox"
-                      checked={weekdays.includes(index)}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={amount}
+                      onChange={(event) => setAmount(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Currency</span>
+                    <input
+                      value={currency}
+                      maxLength={3}
+                      onChange={(event) => setCurrency(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Payment state</span>
+                    <select
+                      value={paymentStatus ?? "unpaid"}
                       onChange={(event) =>
-                        setWeekdays((current) =>
-                          event.target.checked
-                            ? [...current, index]
-                            : current.filter((day) => day !== index),
+                        setPaymentStatus(
+                          event.target.value as "unpaid" | "paid",
                         )
                       }
+                    >
+                      <option value="unpaid">Unpaid</option>
+                      <option value="paid">Paid</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="form-row">
+                  <label>
+                    <span>Bill category</span>
+                    <input
+                      value={billCategory}
+                      maxLength={100}
+                      onChange={(event) => setBillCategory(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Account note</span>
+                    <input
+                      value={accountNote}
+                      maxLength={240}
+                      onChange={(event) => setAccountNote(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <label className="check-field">
+                  <input
+                    type="checkbox"
+                    checked={autopay}
+                    onChange={(event) => setAutopay(event.target.checked)}
+                  />
+                  <span>Autopay is enabled outside Nexus</span>
+                </label>
+              </>
+            ) : null}
+            {eventType === "birthday" ? (
+              <>
+                <div className="form-row">
+                  <label>
+                    <span>Relationship</span>
+                    <input
+                      value={relationship}
+                      maxLength={100}
+                      onChange={(event) => setRelationship(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Birth year (optional)</span>
+                    <input
+                      type="number"
+                      min={1800}
+                      max={new Date().getFullYear()}
+                      value={birthYear}
+                      onChange={(event) => setBirthYear(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="form-row">
+                  <label>
+                    <span>Gift note</span>
+                    <input
+                      value={giftIdea}
+                      maxLength={500}
+                      onChange={(event) => setGiftIdea(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Preferred contact</span>
+                    <input
+                      value={contactMethod}
+                      maxLength={160}
+                      onChange={(event) => setContactMethod(event.target.value)}
+                    />
+                  </label>
+                </div>
+              </>
+            ) : null}
+            <label>
+              <span>Notes (optional)</span>
+              <textarea
+                value={notes}
+                maxLength={4000}
+                rows={3}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            </label>
+            <div className="form-row">
+              <label>
+                <span>Priority</span>
+                <select
+                  value={priority}
+                  onChange={(event) =>
+                    setPriority(event.target.value as CalendarEvent["priority"])
+                  }
+                >
+                  <option value="standard">Standard</option>
+                  <option value="important">Important</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </label>
+              <label>
+                <span>Status</span>
+                <select
+                  value={status}
+                  onChange={(event) =>
+                    setStatus(event.target.value as CalendarEvent["status"])
+                  }
+                >
+                  <option value="scheduled">Scheduled</option>
+                  <option value="completed">Completed</option>
+                  <option value="dismissed">Dismissed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </label>
+            </div>
+            <div className="form-row">
+              <label>
+                <span>Repeat</span>
+                <select
+                  value={frequency}
+                  onChange={(event) =>
+                    setFrequency(
+                      event.target.value as
+                        "none" | RecurrenceRule["frequency"],
+                    )
+                  }
+                >
+                  <option value="none">Does not repeat</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Annually</option>
+                </select>
+              </label>
+              {frequency !== "none" ? (
+                <label>
+                  <span>Custom interval</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={interval}
+                    onChange={(event) =>
+                      setInterval(Number(event.target.value))
+                    }
+                  />
+                </label>
+              ) : null}
+            </div>
+            {frequency === "weekly" ? (
+              <fieldset>
+                <legend>Selected weekdays</legend>
+                <div className="weekday-picker">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                    (label, index) => (
+                      <label key={label}>
+                        <input
+                          type="checkbox"
+                          checked={weekdays.includes(index)}
+                          onChange={(event) =>
+                            setWeekdays((current) =>
+                              event.target.checked
+                                ? [...current, index]
+                                : current.filter((day) => day !== index),
+                            )
+                          }
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ),
+                  )}
+                </div>
+              </fieldset>
+            ) : null}
+            {frequency === "monthly" ? (
+              <fieldset>
+                <legend>Monthly pattern</legend>
+                <div className="segmented-options">
+                  <label>
+                    <input
+                      type="radio"
+                      name="monthly-mode"
+                      checked={monthlyMode === "date"}
+                      onChange={() => setMonthlyMode("date")}
+                    />
+                    <span>Same date</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="monthly-mode"
+                      checked={monthlyMode === "relative"}
+                      onChange={() => setMonthlyMode("relative")}
+                    />
+                    <span>Same relative weekday</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="monthly-mode"
+                      checked={monthlyMode === "last-day"}
+                      onChange={() => setMonthlyMode("last-day")}
+                    />
+                    <span>Last day of month</span>
+                  </label>
+                </div>
+                {monthlyMode === "relative" ? (
+                  <div className="form-row">
+                    <label>
+                      <span>Ordinal</span>
+                      <select
+                        value={monthlyOrdinal}
+                        onChange={(event) =>
+                          setMonthlyOrdinal(
+                            Number(event.target.value) as -1 | 1 | 2 | 3 | 4,
+                          )
+                        }
+                      >
+                        <option value={1}>First</option>
+                        <option value={2}>Second</option>
+                        <option value={3}>Third</option>
+                        <option value={4}>Fourth</option>
+                        <option value={-1}>Last</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Weekday</span>
+                      <select
+                        value={monthlyWeekday}
+                        onChange={(event) =>
+                          setMonthlyWeekday(Number(event.target.value))
+                        }
+                      >
+                        {[
+                          "Sunday",
+                          "Monday",
+                          "Tuesday",
+                          "Wednesday",
+                          "Thursday",
+                          "Friday",
+                          "Saturday",
+                        ].map((label, index) => (
+                          <option value={index} key={label}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
+              </fieldset>
+            ) : null}
+            {frequency !== "none" ? (
+              <div className="form-row">
+                <label>
+                  <span>Repeat until (optional)</span>
+                  <input
+                    type="date"
+                    min={localDate}
+                    value={until}
+                    disabled={count !== ""}
+                    onChange={(event) => setUntil(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Or stop after occurrences</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={count}
+                    disabled={until !== ""}
+                    onChange={(event) => setCount(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
+            <fieldset>
+              <legend>In-app reminders</legend>
+              <div className="reminder-options">
+                {[
+                  [0, "At event time"],
+                  [15, "15 minutes before"],
+                  [30, "30 minutes before"],
+                  [60, "1 hour before"],
+                  [120, "2 hours before"],
+                  [1440, "1 day before"],
+                  [4320, "3 days before"],
+                  [10080, "7 days before"],
+                  [20160, "14 days before"],
+                ].map(([offset, label]) => (
+                  <label key={offset}>
+                    <input
+                      type="checkbox"
+                      checked={reminders.includes(offset as number)}
+                      onChange={() => toggleReminder(offset as number)}
                     />
                     <span>{label}</span>
                   </label>
-                ),
-              )}
-            </div>
-          </fieldset>
-        ) : null}
-        {frequency === "monthly" ? (
-          <fieldset>
-            <legend>Monthly pattern</legend>
-            <div className="segmented-options">
-              <label>
+                ))}
+              </div>
+              <label className="check-field">
                 <input
-                  type="radio"
-                  name="monthly-mode"
-                  value="date"
-                  checked={monthlyMode === "date"}
-                  onChange={() => setMonthlyMode("date")}
+                  type="checkbox"
+                  checked={escalationEnabled}
+                  onChange={(event) =>
+                    setEscalationEnabled(event.target.checked)
+                  }
                 />
-                <span>Same date</span>
+                <span>
+                  Allow bounded in-app escalation for this important item
+                </span>
               </label>
-              <label>
-                <input
-                  type="radio"
-                  name="monthly-mode"
-                  value="relative"
-                  checked={monthlyMode === "relative"}
-                  onChange={() => setMonthlyMode("relative")}
-                />
-                <span>Same relative weekday</span>
-              </label>
-            </div>
-          </fieldset>
-        ) : null}
-        {frequency !== "none" ? (
-          <div className="form-row">
-            <label>
-              <span>Repeat until (optional)</span>
-              <input
-                type="date"
-                min={localDate}
-                value={until}
-                disabled={count !== ""}
-                onChange={(event) => setUntil(event.target.value)}
-              />
-            </label>
-            <label>
-              <span>Or stop after occurrences</span>
-              <input
-                type="number"
-                min={1}
-                max={1000}
-                value={count}
-                disabled={until !== ""}
-                onChange={(event) => setCount(event.target.value)}
-              />
-            </label>
+            </fieldset>
           </div>
         ) : null}
-        <div className="form-row">
-          <label>
-            <span>In-app reminder</span>
-            <select
-              value={reminder}
-              onChange={(event) => setReminder(event.target.value)}
-            >
-              <option value="">None</option>
-              <option value="0">At event time</option>
-              <option value="5">5 minutes before</option>
-              <option value="15">15 minutes before</option>
-              <option value="60">1 hour before</option>
-              <option value="1440">1 day before</option>
-            </select>
-          </label>
-          <label>
-            <span>Status</span>
-            <select
-              value={status}
-              onChange={(event) =>
-                setStatus(event.target.value as CalendarEvent["status"])
-              }
-            >
-              <option value="confirmed">Confirmed</option>
-              <option value="tentative">Tentative</option>
-              <option value="canceled">Canceled</option>
-            </select>
-          </label>
-        </div>
         {formError ? (
           <p className="form-error" id="event-form-error" role="alert">
             {formError}
           </p>
         ) : null}
       </form>
+    </Dialog>
+  );
+}
+
+function EventDetailDialog({
+  item,
+  hourCycle,
+  now,
+  onClose,
+  onEdit,
+  onReschedule,
+  onStatus,
+  onPayment,
+  onDelete,
+}: {
+  item: CalendarEvent | null;
+  hourCycle: "12" | "24";
+  now: Date;
+  onClose(): void;
+  onEdit(item: CalendarEvent): void;
+  onReschedule(item: CalendarEvent): void;
+  onStatus(item: CalendarEvent, status: CalendarEvent["status"]): void;
+  onPayment(item: CalendarEvent, status: "paid" | "unpaid"): void;
+  onDelete(item: CalendarEvent): void;
+}) {
+  const actionable = item ? eventIsActionable(item.eventType) : false;
+  const countdown = item ? eventCountdown(item, now) : null;
+  return (
+    <Dialog
+      open={Boolean(item)}
+      title={item?.title ?? "Event details"}
+      description={
+        item
+          ? `${eventTypeLabel(item.eventType)} · ${eventTime(item, hourCycle)}`
+          : undefined
+      }
+      onClose={onClose}
+      footer={
+        item ? (
+          <>
+            <Button
+              variant="tertiary"
+              icon={<Trash2 aria-hidden="true" />}
+              onClick={() => onDelete(item)}
+            >
+              Delete
+            </Button>
+            <Button
+              variant="tertiary"
+              icon={<CalendarClock aria-hidden="true" />}
+              onClick={() => onReschedule(item)}
+            >
+              Reschedule
+            </Button>
+            <Button
+              variant="primary"
+              icon={<Pencil aria-hidden="true" />}
+              onClick={() => onEdit(item)}
+            >
+              Edit
+            </Button>
+          </>
+        ) : null
+      }
+    >
+      {item ? (
+        <div className="event-detail">
+          <div className="event-detail__status">
+            <Badge tone={item.priority === "critical" ? "danger" : "success"}>
+              {item.priority}
+            </Badge>
+            <Badge tone="neutral">{item.status}</Badge>
+            {item.paymentStatus ? (
+              <Badge tone={item.paymentStatus === "paid" ? "success" : "gold"}>
+                {item.paymentStatus}
+              </Badge>
+            ) : null}
+          </div>
+          <dl>
+            <div>
+              <dt>Date</dt>
+              <dd>{formatDate(item.localDate)}</dd>
+            </div>
+            <div>
+              <dt>Time</dt>
+              <dd>
+                {eventTime(item, hourCycle)}
+                {countdown ? ` · ${countdown}` : ""}
+              </dd>
+            </div>
+            {!item.allDay && item.startAt && item.endAt ? (
+              <div>
+                <dt>Duration</dt>
+                <dd>
+                  {compactDuration(
+                    Date.parse(item.endAt) - Date.parse(item.startAt),
+                  )}
+                </dd>
+              </div>
+            ) : null}
+            {item.location ? (
+              <div>
+                <dt>Location</dt>
+                <dd>{item.location}</dd>
+              </div>
+            ) : null}
+            {item.provider ? (
+              <div>
+                <dt>Provider</dt>
+                <dd>{item.provider}</dd>
+              </div>
+            ) : null}
+            {item.amount !== null ? (
+              <div>
+                <dt>Amount</dt>
+                <dd>
+                  {new Intl.NumberFormat(undefined, {
+                    style: "currency",
+                    currency: item.currency,
+                  }).format(item.amount)}
+                </dd>
+              </div>
+            ) : null}
+            <div>
+              <dt>Reminders</dt>
+              <dd>
+                {item.reminderOffsets.length
+                  ? item.reminderOffsets
+                      .map((offset) =>
+                        offset === 0
+                          ? "At event time"
+                          : `${offset} minutes before`,
+                      )
+                      .join(", ")
+                  : "None"}
+              </dd>
+            </div>
+            {item.recurrence ? (
+              <div>
+                <dt>Recurrence</dt>
+                <dd>{recurrenceLabel(item.recurrence)}</dd>
+              </div>
+            ) : null}
+          </dl>
+          {item.notes ? <p>{item.notes}</p> : null}
+          {item.meetingUrl ? (
+            <a href={item.meetingUrl} target="_blank" rel="noreferrer">
+              Open meeting link
+            </a>
+          ) : null}
+          <div className="event-detail__actions">
+            {item.eventType === "financial" && item.paymentStatus ? (
+              <Button
+                variant="tertiary"
+                onClick={() =>
+                  onPayment(
+                    item,
+                    item.paymentStatus === "paid" ? "unpaid" : "paid",
+                  )
+                }
+              >
+                {item.paymentStatus === "paid" ? "Mark unpaid" : "Mark paid"}
+              </Button>
+            ) : null}
+            {actionable && item.status === "scheduled" ? (
+              <Button
+                variant="tertiary"
+                icon={<Check aria-hidden="true" />}
+                onClick={() => onStatus(item, "completed")}
+              >
+                Complete
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </Dialog>
   );
 }
@@ -2880,6 +3737,33 @@ function PreferencesDialog({
   const [permissionDenied, setPermissionDenied] = useState(
     preferences?.notificationPermission === "denied",
   );
+  const [defaultView, setDefaultView] = useState<
+    TimePreferences["defaultView"]
+  >(preferences?.defaultView ?? "day");
+  const [defaultDuration, setDefaultDuration] = useState(
+    preferences?.defaultEventDurationMinutes ?? 60,
+  );
+  const [transitionBuffer, setTransitionBuffer] = useState(
+    preferences?.transitionBufferMinutes ?? 15,
+  );
+  const [morningBriefTime, setMorningBriefTime] = useState(
+    preferences?.morningBriefTime ?? "07:00",
+  );
+  const [eveningBriefTime, setEveningBriefTime] = useState(
+    preferences?.eveningBriefTime ?? "20:00",
+  );
+  const [escalationEnabled, setEscalationEnabled] = useState(
+    preferences?.escalationEnabled ?? true,
+  );
+  const [defaultSnooze, setDefaultSnooze] = useState(
+    preferences?.defaultSnoozeMinutes ?? 60,
+  );
+  const [overloadMinutes, setOverloadMinutes] = useState(
+    preferences?.overloadMinutesPerDay ?? 480,
+  );
+  const [overloadItems, setOverloadItems] = useState(
+    preferences?.overloadImportantItemCount ?? 5,
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const submit = async (event: FormEvent) => {
@@ -2897,6 +3781,15 @@ function PreferencesDialog({
         quietHoursEnd: quietEnd,
         quietBehavior,
         notificationPermission: permissionDenied ? "denied" : "in-app-only",
+        defaultView,
+        defaultEventDurationMinutes: defaultDuration,
+        transitionBufferMinutes: transitionBuffer,
+        morningBriefTime,
+        eveningBriefTime,
+        escalationEnabled,
+        defaultSnoozeMinutes: defaultSnooze,
+        overloadMinutesPerDay: overloadMinutes,
+        overloadImportantItemCount: overloadItems,
         updatedAt: new Date().toISOString(),
       });
     } catch (saveError) {
@@ -2965,6 +3858,118 @@ function PreferencesDialog({
             </select>
           </label>
         </div>
+        <div className="form-row">
+          <label>
+            <span>Default Calendar view</span>
+            <select
+              value={defaultView}
+              onChange={(event) =>
+                setDefaultView(
+                  event.target.value as TimePreferences["defaultView"],
+                )
+              }
+            >
+              <option value="day">Today</option>
+              <option value="agenda">Agenda</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
+          </label>
+          <label>
+            <span>Default event duration</span>
+            <select
+              value={defaultDuration}
+              onChange={(event) =>
+                setDefaultDuration(Number(event.target.value))
+              }
+            >
+              <option value={30}>30 minutes</option>
+              <option value={45}>45 minutes</option>
+              <option value={60}>60 minutes</option>
+              <option value={90}>90 minutes</option>
+              <option value={120}>2 hours</option>
+            </select>
+          </label>
+        </div>
+        <div className="form-row">
+          <label>
+            <span>Tight transition threshold</span>
+            <input
+              type="number"
+              min={0}
+              max={180}
+              value={transitionBuffer}
+              onChange={(event) =>
+                setTransitionBuffer(Number(event.target.value))
+              }
+            />
+          </label>
+          <label>
+            <span>Default snooze minutes</span>
+            <input
+              type="number"
+              min={5}
+              max={1440}
+              value={defaultSnooze}
+              onChange={(event) => setDefaultSnooze(Number(event.target.value))}
+            />
+          </label>
+        </div>
+        <div className="form-row">
+          <label>
+            <span>Morning Brief time</span>
+            <input
+              type="time"
+              value={morningBriefTime}
+              onChange={(event) => setMorningBriefTime(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Evening Brief time</span>
+            <input
+              type="time"
+              value={eveningBriefTime}
+              onChange={(event) => setEveningBriefTime(event.target.value)}
+            />
+          </label>
+        </div>
+        <fieldset>
+          <legend>Overload thresholds</legend>
+          <div className="form-row">
+            <label>
+              <span>Scheduled minutes per day</span>
+              <input
+                type="number"
+                min={60}
+                max={1440}
+                value={overloadMinutes}
+                onChange={(event) =>
+                  setOverloadMinutes(Number(event.target.value))
+                }
+              />
+            </label>
+            <label>
+              <span>Important items per day</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={overloadItems}
+                onChange={(event) =>
+                  setOverloadItems(Number(event.target.value))
+                }
+              />
+            </label>
+          </div>
+        </fieldset>
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={escalationEnabled}
+            onChange={(event) => setEscalationEnabled(event.target.checked)}
+          />
+          <span>Allow bounded in-app escalation for opted-in items</span>
+        </label>
         <label className="check-field">
           <input
             type="checkbox"
@@ -3022,6 +4027,35 @@ function PreferencesDialog({
           In-app reminders remain useful when device permission is unavailable.
           Nexus does not request broad permission or claim delivery.
         </p>
+        <Button
+          variant="tertiary"
+          type="button"
+          onClick={() => {
+            if (
+              !window.confirm(
+                "Restore Calendar settings to the Nexus defaults? Existing events and reminders will not be deleted.",
+              )
+            )
+              return;
+            setWeekStartsOn(1);
+            setHourCycle("12");
+            setQuietEnabled(false);
+            setQuietStart("22:00");
+            setQuietEnd("07:00");
+            setQuietBehavior("delay");
+            setDefaultView("day");
+            setDefaultDuration(60);
+            setTransitionBuffer(15);
+            setMorningBriefTime("07:00");
+            setEveningBriefTime("20:00");
+            setEscalationEnabled(true);
+            setDefaultSnooze(60);
+            setOverloadMinutes(480);
+            setOverloadItems(5);
+          }}
+        >
+          Restore defaults
+        </Button>
         {error ? (
           <p className="form-error" role="alert">
             {error}

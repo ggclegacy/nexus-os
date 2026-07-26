@@ -67,7 +67,7 @@ describe("personal time recurrence", () => {
     ).toEqual(["2026-01-31", "2026-03-31"]);
   });
 
-  it("supports relative monthly weekdays and leap-year yearly rules", () => {
+  it("supports relative monthly weekdays and leap-day birthday fallback", () => {
     expect(
       expandRecurrence(
         "2026-01-30",
@@ -83,7 +83,13 @@ describe("personal time recurrence", () => {
         "2028-12-31",
         rule({ frequency: "yearly" }),
       ),
-    ).toEqual(["2024-02-29", "2028-02-29"]);
+    ).toEqual([
+      "2024-02-29",
+      "2025-02-28",
+      "2026-02-28",
+      "2027-02-28",
+      "2028-02-29",
+    ]);
   });
 });
 

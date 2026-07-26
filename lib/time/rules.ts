@@ -88,17 +88,18 @@ function relativeWeekday(value: string) {
   };
 }
 
-function matchesMonthly(
-  start: string,
-  date: string,
-  mode: RecurrenceRule["monthlyMode"],
-) {
-  if (mode === "date") return start.slice(8, 10) === date.slice(8, 10);
+function matchesMonthly(start: string, date: string, rule: RecurrenceRule) {
+  if (rule.monthlyMode === "last-day") {
+    const [year, month, day] = date.split("-").map(Number);
+    return day === new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+  if (rule.monthlyMode === "date")
+    return start.slice(8, 10) === date.slice(8, 10);
   const source = relativeWeekday(start);
   const candidate = relativeWeekday(date);
-  return (
-    source.weekday === candidate.weekday && source.ordinal === candidate.ordinal
-  );
+  const weekday = rule.monthlyWeekday ?? source.weekday;
+  const ordinal = rule.monthlyOrdinal ?? source.ordinal;
+  return weekday === candidate.weekday && ordinal === candidate.ordinal;
 }
 
 function matchesRule(start: string, date: string, rule: RecurrenceRule) {
@@ -115,16 +116,21 @@ function matchesRule(start: string, date: string, rule: RecurrenceRule) {
     return (
       elapsedMonths >= 0 &&
       elapsedMonths % rule.interval === 0 &&
-      matchesMonthly(start, date, rule.monthlyMode)
+      matchesMonthly(start, date, rule)
     );
   }
   const [startYear, startMonth, startDay] = start.split("-").map(Number);
   const [year, month, day] = date.split("-").map(Number);
+  const leapDayFallback =
+    startMonth === 2 &&
+    startDay === 29 &&
+    month === 2 &&
+    day === 28 &&
+    new Date(Date.UTC(year, 1, 29)).getUTCMonth() !== 1;
   return (
     year >= startYear &&
     (year - startYear) % rule.interval === 0 &&
-    month === startMonth &&
-    day === startDay
+    ((month === startMonth && day === startDay) || leapDayFallback)
   );
 }
 
@@ -294,7 +300,19 @@ export function recurrenceLabel(rule: RecurrenceRule | null) {
       return "Weekdays";
     return rule.interval === 1 ? "Every week" : `${every} weeks`;
   }
-  if (rule.frequency === "monthly")
-    return rule.interval === 1 ? "Every month" : `${every} months`;
+  if (rule.frequency === "monthly") {
+    const cadence = rule.interval === 1 ? "Every month" : `${every} months`;
+    if (rule.monthlyMode === "last-day") return `${cadence} on the last day`;
+    if (rule.monthlyMode === "relative") {
+      const ordinal =
+        rule.monthlyOrdinal === -1
+          ? "last"
+          : ["", "first", "second", "third", "fourth"][
+              rule.monthlyOrdinal ?? 0
+            ] || "matching";
+      return `${cadence} on the ${ordinal} weekday`;
+    }
+    return cadence;
+  }
   return rule.interval === 1 ? "Every year" : `${every} years`;
 }

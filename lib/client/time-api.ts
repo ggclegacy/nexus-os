@@ -5,6 +5,7 @@ import type {
   CalendarFilters,
   CalendarPayload,
   RecurrenceEditScope,
+  ReminderInstance,
   Routine,
   RoutineInput,
   RoutineOccurrence,
@@ -27,13 +28,23 @@ export class ApiConflictError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const idempotencyKey =
+    init?.method === "POST" ? crypto.randomUUID() : undefined;
+  const requestInit: RequestInit = {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
       ...init?.headers,
     },
-  });
+  };
+  let response: Response;
+  try {
+    response = await fetch(url, requestInit);
+  } catch (error) {
+    if (!idempotencyKey) throw error;
+    response = await fetch(url, requestInit);
+  }
   const payload = (await response.json()) as T & {
     error?: string;
     conflicts?: ApiConflictError["conflicts"];
@@ -57,6 +68,11 @@ function filterParams(filters: CalendarFilters) {
     priorities: String(filters.includePriorities),
     routines: String(filters.includeRoutines),
     completed: String(filters.includeCompleted),
+    types: filters.eventTypes.join(","),
+    statuses: filters.statuses.join(","),
+    importance: filters.priorities.join(","),
+    payment: filters.payment,
+    recurrence: filters.recurrence,
   });
 }
 
@@ -187,6 +203,21 @@ export const timeApi = {
       { method: "PATCH", body: JSON.stringify(input) },
     );
     return result.preferences;
+  },
+
+  async updateReminder(
+    id: string,
+    action: "seen" | "snooze" | "resolve" | "dismiss",
+    snoozedUntil?: string,
+  ) {
+    const result = await request<{ reminder: ReminderInstance }>(
+      `/api/reminders/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ action, snoozedUntil }),
+      },
+    );
+    return result.reminder;
   },
 };
 

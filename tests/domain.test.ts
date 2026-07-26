@@ -3,10 +3,16 @@ import { assembleCommandData } from "../lib/server/command-service";
 import { buildAlerts, buildDailyBriefing } from "../lib/domain/briefing";
 import {
   parsePriorityInput,
+  parsePriorityUpdate,
   parseTimelineInput,
+  parseTimelineUpdate,
   ValidationError,
 } from "../lib/domain/validation";
 import type { Priority, TimelineItem } from "../lib/domain/types";
+import {
+  parseCalendarEvent,
+  parseTimePreferences,
+} from "../lib/time/validation";
 
 const now = new Date("2026-07-26T15:00:00.000Z");
 
@@ -109,5 +115,58 @@ describe("boundary validation", () => {
         timeZone: "America/Chicago",
       }).startAt,
     ).toBeNull();
+  });
+
+  it("rejects coercive booleans, invalid statuses, and silent truncation", () => {
+    expect(() =>
+      parsePriorityInput({ title: "Focus", isTop: "false" }),
+    ).toThrow("true or false");
+    expect(() => parsePriorityUpdate({ archived: "false" })).toThrow(
+      "true or false",
+    );
+    expect(() =>
+      parseTimelineUpdate({
+        title: "Focus",
+        kind: "event",
+        localDate: "2026-07-26",
+        timeZone: "America/Chicago",
+        startAt: "2026-07-26T15:00:00.000Z",
+        status: "unknown",
+      }),
+    ).toThrow("status is invalid");
+    expect(() =>
+      parseCalendarEvent({
+        title: "Event",
+        allDay: true,
+        localDate: "2026-07-26",
+        timeZone: "America/Chicago",
+        status: "unknown",
+      }),
+    ).toThrow("status is invalid");
+    expect(() =>
+      parseCalendarEvent({
+        title: "Event",
+        allDay: true,
+        localDate: "2026-07-26",
+        timeZone: "America/Chicago",
+        notes: "x".repeat(4_001),
+      }),
+    ).toThrow("4000 characters or fewer");
+  });
+
+  it("requires explicit valid preference enums", () => {
+    expect(() =>
+      parseTimePreferences({
+        timeZone: "America/Chicago",
+        locale: "en-US",
+        weekStartsOn: 2,
+        hourCycle: "12",
+        quietHoursEnabled: false,
+        quietHoursStart: "22:00",
+        quietHoursEnd: "07:00",
+        quietBehavior: "delay",
+        notificationPermission: "in-app-only",
+      }),
+    ).toThrow("Week start is invalid");
   });
 });

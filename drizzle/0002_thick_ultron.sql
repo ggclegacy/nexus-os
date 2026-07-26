@@ -1,0 +1,1 @@
+ALTER TABLE `timeline_items` ADD `event_metadata` text DEFAULT '{}' NOT NULL;

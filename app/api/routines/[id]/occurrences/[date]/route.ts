@@ -1,5 +1,8 @@
 import { updateRoutineOccurrence } from "../../../../../../db/time-repository";
-import { parseOccurrenceUpdate } from "../../../../../../lib/time/validation";
+import {
+  parseDateKey,
+  parseOccurrenceUpdate,
+} from "../../../../../../lib/time/validation";
 import { jsonError, readJson } from "../../../../../../lib/server/http";
 
 interface Context {
@@ -9,10 +12,11 @@ interface Context {
 export async function PATCH(request: Request, context: Context) {
   try {
     const { id, date } = await context.params;
+    const scheduledDate = parseDateKey(date, "Scheduled date");
     const input = parseOccurrenceUpdate(await readJson(request));
     const occurrence = await updateRoutineOccurrence(
       id,
-      date,
+      scheduledDate,
       input.status,
       input.note,
     );

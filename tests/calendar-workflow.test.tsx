@@ -48,6 +48,7 @@ describe("Calendar workflow", () => {
     await screen.findByText("Your agenda is open");
     await user.click(screen.getByRole("button", { name: "Add event" }));
     await user.type(screen.getByLabelText("Title"), "Morning planning");
+    await user.click(screen.getByRole("button", { name: "More details" }));
     await user.selectOptions(screen.getByLabelText("Repeat"), "weekly");
     await user.click(
       within(screen.getByRole("dialog", { name: "Add event" })).getByRole(
@@ -328,5 +329,78 @@ describe("Calendar workflow", () => {
     expect(
       await screen.findByText(/Offline. Showing the last loaded local view/),
     ).toBeVisible();
+  });
+
+  it("applies financial defaults, stores multiple reminders, and marks a bill paid", async () => {
+    window.history.replaceState({}, "", "/calendar?view=day&date=2026-07-26");
+    const user = userEvent.setup();
+    const api = new FakeTimeApi();
+    render(<CalendarApp api={api} />);
+
+    await screen.findByText("This day is open");
+    await user.click(screen.getAllByRole("button", { name: "Quick Add" })[0]);
+    await user.type(screen.getByLabelText("Title"), "Electric bill");
+    await user.selectOptions(screen.getByLabelText("Event type"), "financial");
+    expect(screen.getByLabelText("All-day event")).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "More details" }));
+    await user.type(screen.getByLabelText("Amount (optional)"), "184.25");
+    expect(screen.getByLabelText("7 days before")).toBeChecked();
+    expect(screen.getByLabelText("3 days before")).toBeChecked();
+    expect(screen.getByLabelText("1 day before")).toBeChecked();
+    expect(screen.getByLabelText("At event time")).toBeChecked();
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Add event" })).getByRole(
+        "button",
+        { name: "Add event" },
+      ),
+    );
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]).toMatchObject({
+      eventType: "financial",
+      amount: 184.25,
+      currency: "USD",
+      paymentStatus: "unpaid",
+      reminderOffsets: [0, 1440, 4320, 10080],
+    });
+
+    const eventButton = screen
+      .getAllByText("Electric bill")
+      .map((element) => element.closest("button"))
+      .find((element) => element?.classList.contains("today-event__main"));
+    expect(eventButton).toBeTruthy();
+    await user.click(eventButton as HTMLButtonElement);
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Electric bill" })).getByRole(
+        "button",
+        { name: "Mark paid" },
+      ),
+    );
+    await waitFor(() =>
+      expect(api.events[0]).toMatchObject({
+        paymentStatus: "paid",
+        status: "completed",
+      }),
+    );
+  });
+
+  it("retains a created event after the Calendar remounts", async () => {
+    const user = userEvent.setup();
+    const api = new FakeTimeApi();
+    const first = render(<CalendarApp api={api} />);
+    await screen.findByText("Your agenda is open");
+    await user.click(screen.getByRole("button", { name: "Add event" }));
+    await user.type(screen.getByLabelText("Title"), "Persisted appointment");
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Add event" })).getByRole(
+        "button",
+        { name: "Add event" },
+      ),
+    );
+    expect(await screen.findByText("Persisted appointment")).toBeVisible();
+
+    first.unmount();
+    render(<CalendarApp api={api} />);
+    expect(await screen.findByText("Persisted appointment")).toBeVisible();
   });
 });

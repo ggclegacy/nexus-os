@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:accessibility": "vitest run tests/accessibility.test.tsx",
-    "test:e2e": "vitest run tests/command-workflow.test.tsx tests/calendar-workflow.test.tsx",
+    "test:e2e": "vitest run tests/command-workflow.test.tsx tests/calendar-workflow.test.tsx tests/calendar-phase2-workflow.test.tsx",
     "test:rendered": "npm run build && node --test tests/rendered-html.test.mjs",
     "test:rendered:vercel": "npm run build:vercel && NEXUS_RENDER_TARGET=vercel node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vinext",

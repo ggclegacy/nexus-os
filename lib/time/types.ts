@@ -1,8 +1,27 @@
 import type { Priority } from "../domain/types";
 
-export type CalendarView = "agenda" | "day" | "week";
-export type TimeArea = CalendarView | "priorities" | "routines";
-export type EventStatus = "confirmed" | "tentative" | "canceled";
+export type CalendarView = "agenda" | "day" | "week" | "month";
+export type TimeArea =
+  | CalendarView
+  | "reminders"
+  | "birthdays"
+  | "bills"
+  | "priorities"
+  | "routines";
+export type CalendarEventType =
+  | "personal"
+  | "medical"
+  | "financial"
+  | "meeting"
+  | "workout"
+  | "protocol"
+  | "family"
+  | "birthday"
+  | "travel"
+  | "reminder"
+  | "custom";
+export type EventStatus = "scheduled" | "completed" | "dismissed" | "cancelled";
+export type EventPriority = "standard" | "important" | "critical";
 export type SyncConflictState = "none" | "local-newer" | "remote-newer";
 export type RecurrenceFrequency = "daily" | "weekly" | "monthly" | "yearly";
 export type RecurrenceEditScope = "occurrence" | "future" | "series";
@@ -17,16 +36,24 @@ export interface RecurrenceRule {
   frequency: RecurrenceFrequency;
   interval: number;
   weekdays: number[];
-  monthlyMode: "date" | "relative";
+  monthlyMode: "date" | "relative" | "last-day";
+  monthlyWeekday?: number | null;
+  monthlyOrdinal?: 1 | 2 | 3 | 4 | -1 | null;
   until: string | null;
   count: number | null;
 }
 
 export interface CalendarEventInput {
   title: string;
+  eventType: CalendarEventType;
   notes: string;
   location: string;
-  category: string | null;
+  provider: string;
+  meetingUrl: string;
+  amount: number | null;
+  currency: string;
+  paymentStatus: "unpaid" | "paid" | null;
+  priority: EventPriority;
   status: EventStatus;
   allDay: boolean;
   localDate: string;
@@ -36,6 +63,15 @@ export interface CalendarEventInput {
   timeZone: string;
   recurrence: RecurrenceRule | null;
   reminderOffsets: number[];
+  relationship?: string;
+  birthYear?: number | null;
+  giftIdea?: string;
+  contactMethod?: string;
+  billCategory?: string;
+  autopay?: boolean;
+  accountNote?: string;
+  paidAt?: string | null;
+  escalationEnabled?: boolean;
 }
 
 export interface CalendarEvent extends CalendarEventInput {
@@ -118,6 +154,35 @@ export interface Reminder {
   updatedAt: string;
 }
 
+export type ReminderState =
+  | "scheduled"
+  | "delivered"
+  | "seen"
+  | "snoozed"
+  | "resolved"
+  | "dismissed"
+  | "expired";
+
+export interface ReminderInstance {
+  id: string;
+  reminderId: string;
+  eventId: string;
+  occurrenceDate: string;
+  occurrenceKey: string;
+  scheduledFor: string;
+  deliveredAt: string | null;
+  seenAt: string | null;
+  snoozedUntil: string | null;
+  resolvedAt: string | null;
+  state: ReminderState;
+  reason: string;
+  ruleLabel: string;
+  escalationLevel: number;
+  nextEscalationAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TimePreferences {
   timeZone: string;
   locale: string;
@@ -128,6 +193,15 @@ export interface TimePreferences {
   quietHoursEnd: string;
   quietBehavior: ReminderQuietBehavior;
   notificationPermission: "in-app-only" | "denied";
+  defaultView: CalendarView;
+  defaultEventDurationMinutes: number;
+  transitionBufferMinutes: number;
+  morningBriefTime: string;
+  eveningBriefTime: string;
+  escalationEnabled: boolean;
+  defaultSnoozeMinutes: number;
+  overloadMinutesPerDay: number;
+  overloadImportantItemCount: number;
   updatedAt: string;
 }
 
@@ -137,6 +211,11 @@ export interface CalendarFilters {
   includePriorities: boolean;
   includeRoutines: boolean;
   includeCompleted: boolean;
+  eventTypes: CalendarEventType[];
+  statuses: EventStatus[];
+  priorities: EventPriority[];
+  payment: "all" | "paid" | "unpaid";
+  recurrence: "all" | "recurring" | "one-time";
 }
 
 export interface CalendarPayload {
@@ -147,6 +226,7 @@ export interface CalendarPayload {
   routines: Routine[];
   occurrences: RoutineOccurrence[];
   reminders: Reminder[];
+  reminderInstances: ReminderInstance[];
   preferences: TimePreferences;
   sourceLabel: string;
   lastUpdatedAt: string;
