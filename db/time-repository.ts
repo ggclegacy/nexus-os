@@ -259,6 +259,7 @@ function eventInputFromRow(row: TimelineRow): CalendarEventInput {
       | "accountNote"
       | "paidAt"
       | "escalationEnabled"
+      | "sensitive"
     >
   >(row.event_metadata, {
     eventType: "personal",
@@ -278,6 +279,7 @@ function eventInputFromRow(row: TimelineRow): CalendarEventInput {
     accountNote: "",
     paidAt: null,
     escalationEnabled: true,
+    sensitive: false,
   });
   return {
     title: row.title,
@@ -834,7 +836,143 @@ function eventMetadata(input: CalendarEventInput) {
     accountNote: input.accountNote ?? "",
     paidAt: input.paidAt ?? null,
     escalationEnabled: input.escalationEnabled ?? true,
+    sensitive: input.sensitive ?? false,
   });
+}
+
+export async function upsertImportedCalendarEvent(input: {
+  id: string;
+  event: CalendarEventInput;
+  sourceId: string;
+  externalCalendarId: string;
+  remoteVersion: string | null;
+  readOnly: boolean;
+  syncedAt: string;
+}) {
+  await ensureTimeSchema();
+  const startAt =
+    input.event.allDay || !input.event.startTime
+      ? null
+      : zonedDateTimeToUtc(
+          input.event.localDate,
+          input.event.startTime,
+          input.event.timeZone,
+        );
+  const endAt =
+    input.event.allDay || !input.event.endTime
+      ? null
+      : zonedDateTimeToUtc(
+          input.event.endLocalDate,
+          input.event.endTime,
+          input.event.timeZone,
+        );
+  const now = new Date().toISOString();
+  await commandDatabase()
+    .prepare(
+      `INSERT INTO timeline_items
+       (id, title, kind, status, start_at, end_at, local_date, end_local_date,
+        start_time, end_time, time_zone, notes, location, category,
+        event_status, event_metadata, recurrence_rule, source, source_id,
+        external_calendar_id, last_synced_at, local_version, remote_version,
+        read_only, conflict_state, deleted_at, migrated_to_routine_id,
+        created_at, updated_at)
+       VALUES (?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL,
+        'imported', ?, ?, ?, 1, ?, ?, 'none', NULL, NULL, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         kind = excluded.kind,
+         start_at = excluded.start_at,
+         end_at = excluded.end_at,
+         local_date = excluded.local_date,
+         end_local_date = excluded.end_local_date,
+         start_time = excluded.start_time,
+         end_time = excluded.end_time,
+         time_zone = excluded.time_zone,
+         notes = excluded.notes,
+         location = excluded.location,
+         category = excluded.category,
+         event_status = excluded.event_status,
+         event_metadata = excluded.event_metadata,
+         source = 'imported',
+         source_id = excluded.source_id,
+         external_calendar_id = excluded.external_calendar_id,
+         last_synced_at = excluded.last_synced_at,
+         remote_version = excluded.remote_version,
+         read_only = excluded.read_only,
+         conflict_state = 'none',
+         deleted_at = NULL,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(
+      input.id,
+      input.event.title,
+      input.event.allDay ? "all-day" : "event",
+      startAt,
+      endAt,
+      input.event.localDate,
+      input.event.endLocalDate,
+      input.event.startTime,
+      input.event.endTime,
+      input.event.timeZone,
+      input.event.notes,
+      input.event.location,
+      input.event.eventType,
+      input.event.status === "cancelled" ? "canceled" : "confirmed",
+      eventMetadata(input.event),
+      input.sourceId,
+      input.externalCalendarId,
+      input.syncedAt,
+      input.remoteVersion,
+      input.readOnly ? 1 : 0,
+      now,
+      now,
+    )
+    .run();
+  return input.id;
+}
+
+export async function markImportedCalendarEventDeleted(
+  id: string,
+  syncedAt: string,
+) {
+  await ensureTimeSchema();
+  await commandDatabase()
+    .prepare(
+      `UPDATE timeline_items
+       SET deleted_at = ?, last_synced_at = ?, updated_at = ?
+       WHERE id = ? AND source = 'imported'`,
+    )
+    .bind(syncedAt, syncedAt, syncedAt, id)
+    .run();
+}
+
+export async function setCalendarEventConflictState(
+  id: string,
+  state: CalendarEvent["conflictState"],
+) {
+  await ensureTimeSchema();
+  await commandDatabase()
+    .prepare(
+      `UPDATE timeline_items
+       SET conflict_state = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(state, new Date().toISOString(), id)
+    .run();
+}
+
+export async function getCanonicalCalendarEvent(id: string) {
+  const row = await getEventRow(id);
+  if (!row) return null;
+  return {
+    input: eventInputFromRow(row),
+    source: row.source,
+    sourceId: row.source_id,
+    externalCalendarId: row.external_calendar_id,
+    localVersion: row.local_version,
+    remoteVersion: row.remote_version,
+    readOnly: Boolean(row.read_only),
+  };
 }
 
 async function writeEvent(

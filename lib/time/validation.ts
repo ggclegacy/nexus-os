@@ -370,6 +370,7 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
       "Reminder escalation",
       true,
     ),
+    sensitive: optionalBoolean(input.sensitive, "Sensitive event", false),
   };
 }
 

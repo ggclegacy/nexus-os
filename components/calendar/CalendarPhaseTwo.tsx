@@ -71,6 +71,10 @@ function eventForReminder(data: CalendarPayload, reminder: ReminderInstance) {
   );
 }
 
+function briefEventTitle(event: CalendarEvent) {
+  return event.sensitive ? "Sensitive event" : event.title;
+}
+
 export function CalendarSignals({
   data,
   now,
@@ -734,7 +738,7 @@ export function CalendarBriefDialog({
               <Clock3 aria-hidden="true" />
               <span>
                 <small>First commitment</small>
-                <strong>{brief.first.title}</strong>
+                <strong>{briefEventTitle(brief.first)}</strong>
               </span>
             </button>
           ) : null}
@@ -743,7 +747,7 @@ export function CalendarBriefDialog({
               <AlertTriangle aria-hidden="true" />
               <span>
                 <small>Most important</small>
-                <strong>{brief.important.title}</strong>
+                <strong>{briefEventTitle(brief.important)}</strong>
               </span>
             </button>
           ) : null}
@@ -755,7 +759,9 @@ export function CalendarBriefDialog({
           ) : null}
           {brief.warnings.map((warning) => (
             <p className="inline-warning" key={warning.id}>
-              {warning.message}
+              {warning.first.sensitive || warning.second.sensitive
+                ? "A sensitive event creates a schedule warning."
+                : warning.message}
             </p>
           ))}
           {brief.unresolved.length ? (
@@ -763,7 +769,9 @@ export function CalendarBriefDialog({
               <h3>Needs a decision</h3>
               {brief.unresolved.slice(0, 5).map((event) => (
                 <div className="brief-unresolved" key={event.occurrenceKey}>
-                  <button onClick={() => onOpen(event)}>{event.title}</button>
+                  <button onClick={() => onOpen(event)}>
+                    {briefEventTitle(event)}
+                  </button>
                   <Button
                     variant="tertiary"
                     onClick={() => onStatus(event, "completed")}

@@ -9,6 +9,10 @@ import {
   parseRecurrenceScope,
 } from "../../../../lib/time/validation";
 import { jsonError, readJson } from "../../../../lib/server/http";
+import {
+  deleteGoogleCalendarEvent,
+  pushCalendarEventUpdate,
+} from "../../../../lib/server/google-calendar";
 
 interface Context {
   params: Promise<{ id: string }>;
@@ -48,7 +52,23 @@ export async function PATCH(request: Request, context: Context) {
     if (!event) {
       return Response.json({ error: "Event not found." }, { status: 404 });
     }
-    return Response.json({ event, conflicts });
+    let sync: { state: "confirmed" | "pending"; message: string } | null = null;
+    try {
+      const result = await pushCalendarEventUpdate(event.id);
+      if (result) {
+        sync = {
+          state: "confirmed",
+          message: "Google Calendar confirmed this change.",
+        };
+      }
+    } catch {
+      sync = {
+        state: "pending",
+        message:
+          "The local change is saved and pending provider reconciliation.",
+      };
+    }
+    return Response.json({ event, conflicts, sync });
   } catch (error) {
     return jsonError(error);
   }
@@ -62,6 +82,7 @@ export async function DELETE(request: Request, context: Context) {
       scope?: unknown;
     };
     const occurrenceDate = parseDateKey(body.occurrenceDate, "Occurrence date");
+    await deleteGoogleCalendarEvent(id);
     const result = await deleteCalendarEvent(
       id,
       occurrenceDate,

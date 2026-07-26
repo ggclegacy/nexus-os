@@ -72,6 +72,7 @@ export interface CalendarEventInput {
   accountNote?: string;
   paidAt?: string | null;
   escalationEnabled?: boolean;
+  sensitive?: boolean;
 }
 
 export interface CalendarEvent extends CalendarEventInput {
@@ -231,7 +232,7 @@ export interface CalendarPayload {
   sourceLabel: string;
   lastUpdatedAt: string;
   stale: boolean;
-  syncAvailable: false;
+  syncAvailable: boolean;
 }
 
 export interface CalendarAdapter {

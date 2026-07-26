@@ -272,3 +272,182 @@ export const timePreferences = sqliteTable("time_preferences", {
     .default(5),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const calendarConnections = sqliteTable(
+  "calendar_connections",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider", { enum: ["google"] }).notNull(),
+    accountId: text("account_id").notNull(),
+    accountEmail: text("account_email").notNull(),
+    displayName: text("display_name").notNull(),
+    status: text("status", {
+      enum: ["healthy", "syncing", "attention", "disconnected"],
+    })
+      .notNull()
+      .default("healthy"),
+    encryptedAccessToken: text("encrypted_access_token").notNull(),
+    encryptedRefreshToken: text("encrypted_refresh_token"),
+    tokenExpiresAt: text("token_expires_at"),
+    scopesJson: text("scopes_json").notNull().default("[]"),
+    lastSyncedAt: text("last_synced_at"),
+    lastError: text("last_error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("calendar_connection_provider_account_idx").on(
+      table.provider,
+      table.accountId,
+    ),
+    check(
+      "calendar_connection_status_check",
+      sql`${table.status} in ('healthy', 'syncing', 'attention', 'disconnected')`,
+    ),
+  ],
+);
+
+export const calendarSources = sqliteTable(
+  "calendar_sources",
+  {
+    id: text("id").primaryKey(),
+    connectionId: text("connection_id"),
+    provider: text("provider").notNull(),
+    externalCalendarId: text("external_calendar_id"),
+    displayName: text("display_name").notNull(),
+    access: text("access", { enum: ["read", "write"] })
+      .notNull()
+      .default("read"),
+    visible: integer("visible").notNull().default(1),
+    includeInAvailability: integer("include_in_availability")
+      .notNull()
+      .default(1),
+    includeInAtlas: integer("include_in_atlas").notNull().default(1),
+    isDefault: integer("is_default").notNull().default(0),
+    syncStatus: text("sync_status", {
+      enum: ["healthy", "syncing", "attention", "disconnected"],
+    })
+      .notNull()
+      .default("healthy"),
+    syncCursor: text("sync_cursor"),
+    lastSyncedAt: text("last_synced_at"),
+    colorKey: text("color_key", { enum: ["gold", "green", "stone"] })
+      .notNull()
+      .default("stone"),
+  },
+  (table) => [
+    uniqueIndex("calendar_source_provider_external_idx").on(
+      table.provider,
+      table.connectionId,
+      table.externalCalendarId,
+    ),
+    index("calendar_sources_connection_idx").on(
+      table.connectionId,
+      table.visible,
+    ),
+  ],
+);
+
+export const externalEventLinks = sqliteTable(
+  "external_event_links",
+  {
+    id: text("id").primaryKey(),
+    sourceId: text("source_id").notNull(),
+    localEventId: text("local_event_id").notNull(),
+    externalEventId: text("external_event_id").notNull(),
+    externalSeriesId: text("external_series_id"),
+    providerVersion: text("provider_version"),
+    lastPulledAt: text("last_pulled_at"),
+    lastPushedAt: text("last_pushed_at"),
+    lastSyncedHash: text("last_synced_hash"),
+    lastLocalVersion: integer("last_local_version").notNull().default(1),
+    pendingAction: text("pending_action"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("external_event_links_source_event_idx").on(
+      table.sourceId,
+      table.externalEventId,
+    ),
+    uniqueIndex("external_event_links_local_idx").on(table.localEventId),
+  ],
+);
+
+export const calendarSyncConflicts = sqliteTable(
+  "calendar_sync_conflicts",
+  {
+    id: text("id").primaryKey(),
+    linkId: text("link_id").notNull(),
+    localEventId: text("local_event_id").notNull(),
+    sourceId: text("source_id").notNull(),
+    differingFieldsJson: text("differing_fields_json").notNull().default("[]"),
+    localJson: text("local_json").notNull().default("{}"),
+    providerJson: text("provider_json").notNull().default("{}"),
+    status: text("status").notNull().default("open"),
+    createdAt: text("created_at").notNull(),
+    resolvedAt: text("resolved_at"),
+  },
+  (table) => [
+    index("calendar_conflicts_status_idx").on(table.status, table.createdAt),
+  ],
+);
+
+export const calendarPrivacySettings = sqliteTable(
+  "calendar_privacy_settings",
+  {
+    id: text("id").primaryKey().default("default"),
+    sensitiveEventsInAtlas: integer("sensitive_events_in_atlas")
+      .notNull()
+      .default(0),
+    patternInsights: integer("pattern_insights").notNull().default(1),
+    semanticSearch: integer("semantic_search").notNull().default(1),
+    immediateCreateWithUndo: integer("immediate_create_with_undo")
+      .notNull()
+      .default(0),
+    disconnectedDataRetention: text("disconnected_data_retention", {
+      enum: ["remove", "snapshot"],
+    })
+      .notNull()
+      .default("remove"),
+    updatedAt: text("updated_at").notNull(),
+  },
+);
+
+export const calendarProposals = sqliteTable("calendar_proposals", {
+  id: text("id").primaryKey(),
+  proposalJson: text("proposal_json").notNull(),
+  status: text("status").notNull().default("draft"),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const calendarAudit = sqliteTable(
+  "calendar_audit",
+  {
+    id: text("id").primaryKey(),
+    actor: text("actor").notNull(),
+    action: text("action").notNull(),
+    source: text("source").notNull(),
+    eventIdsJson: text("event_ids_json").notNull().default("[]"),
+    summary: text("summary").notNull(),
+    providerResult: text("provider_result"),
+    proposalId: text("proposal_id"),
+    undoAvailable: integer("undo_available").notNull().default(0),
+    beforeJson: text("before_json").notNull().default("[]"),
+    afterJson: text("after_json").notNull().default("[]"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("calendar_audit_created_idx").on(table.createdAt)],
+);
+
+export const calendarInsightPreferences = sqliteTable(
+  "calendar_insight_preferences",
+  {
+    insightKey: text("insight_key").primaryKey(),
+    dismissed: integer("dismissed").notNull().default(0),
+    muted: integer("muted").notNull().default(0),
+    updatedAt: text("updated_at").notNull(),
+  },
+);

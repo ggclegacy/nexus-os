@@ -14,6 +14,7 @@ import {
   ArrowRight,
   ArrowUp,
   Bell,
+  BrainCircuit,
   CalendarClock,
   CalendarDays,
   Check,
@@ -36,6 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { CalendarToday } from "./CalendarToday";
+import { CalendarIntelligenceDialog } from "./CalendarIntelligence";
 import {
   BirthdayPlanner,
   BillPlanner,
@@ -113,6 +115,7 @@ type Editor =
   | { type: "preferences" }
   | { type: "brief"; mode: "morning" | "evening" }
   | { type: "rescue" }
+  | { type: "intelligence" }
   | { type: "quick" }
   | null;
 
@@ -813,6 +816,7 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
           range={range}
           refreshing={refreshing}
           sourceLabel={data?.sourceLabel}
+          syncAvailable={data?.syncAvailable ?? false}
           reminderCount={
             data?.reminderInstances.filter((item) =>
               ["delivered", "seen", "escalated"].includes(item.state),
@@ -825,6 +829,7 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
           onRefresh={() => void refresh()}
           onAdd={() => setEditor({ type: "event" })}
           onPreferences={() => setEditor({ type: "preferences" })}
+          onIntelligence={() => setEditor({ type: "intelligence" })}
         />
 
         <TimeFilters filters={filters} onChange={setFilters} />
@@ -1017,6 +1022,12 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
         onClose={() => setEditor(null)}
         onChoose={(type) => setEditor({ type })}
       />
+      <CalendarIntelligenceDialog
+        open={editor?.type === "intelligence"}
+        date={cursor}
+        onClose={() => setEditor(null)}
+        onCalendarChanged={refresh}
+      />
       <EventEditor
         key={
           editor?.type === "event"
@@ -1152,6 +1163,7 @@ function TimeHeader({
   range,
   refreshing,
   sourceLabel,
+  syncAvailable,
   reminderCount,
   onArea,
   onPrevious,
@@ -1160,12 +1172,14 @@ function TimeHeader({
   onRefresh,
   onAdd,
   onPreferences,
+  onIntelligence,
 }: {
   area: TimeArea;
   cursor: string;
   range: { start: string; end: string };
   refreshing: boolean;
   sourceLabel?: string;
+  syncAvailable: boolean;
   reminderCount: number;
   onArea(area: TimeArea): void;
   onPrevious(): void;
@@ -1174,6 +1188,7 @@ function TimeHeader({
   onRefresh(): void;
   onAdd(): void;
   onPreferences(): void;
+  onIntelligence(): void;
 }) {
   const dateLabel =
     area === "week"
@@ -1192,12 +1207,19 @@ function TimeHeader({
         <p className="eyebrow">Personal time</p>
         <h1>Calendar</h1>
         <p>
-          {dateLabel} · {sourceLabel ?? "Private local workspace"} · External
-          sync not connected
+          {dateLabel} · {sourceLabel ?? "Private local workspace"} ·{" "}
+          {syncAvailable ? "Connected sources active" : "Local calendar"}
         </p>
       </div>
       <LiveClock />
       <div className="time-header__actions">
+        <Button
+          variant="tertiary"
+          icon={<BrainCircuit aria-hidden="true" />}
+          onClick={onIntelligence}
+        >
+          Intelligence
+        </Button>
         <Button
           variant="icon"
           aria-label="Time and reminder settings"
@@ -1679,6 +1701,12 @@ function EventCard({
               {event.status}
             </Badge>
           ) : null}
+          {event.source === "imported" ? (
+            <Badge tone="info">{event.provider || "External calendar"}</Badge>
+          ) : (
+            <Badge tone="neutral">Nexus</Badge>
+          )}
+          {event.sensitive ? <Badge tone="neutral">Sensitive</Badge> : null}
         </div>
         <p>{eventTime(event, hourCycle)}</p>
         {event.location ? <p>{event.location}</p> : null}
@@ -2305,7 +2333,7 @@ function QuickAddDialog({
 }: {
   open: boolean;
   onClose(): void;
-  onChoose(type: "event" | "priority" | "routine"): void;
+  onChoose(type: "event" | "priority" | "routine" | "intelligence"): void;
 }) {
   return (
     <Dialog
@@ -2315,6 +2343,11 @@ function QuickAddDialog({
       onClose={onClose}
     >
       <div className="quick-add-grid">
+        <button onClick={() => onChoose("intelligence")}>
+          <BrainCircuit aria-hidden="true" />
+          <strong>Tell Calendar</strong>
+          <span>Describe an event, then review every inferred field.</span>
+        </button>
         <button onClick={() => onChoose("event")}>
           <CalendarClock aria-hidden="true" />
           <strong>Event</strong>
@@ -2396,6 +2429,7 @@ function EventEditor({
   const [escalationEnabled, setEscalationEnabled] = useState(
     item?.escalationEnabled ?? false,
   );
+  const [sensitive, setSensitive] = useState(item?.sensitive ?? false);
   const [priority, setPriority] = useState<CalendarEvent["priority"]>(
     item?.priority ?? "standard",
   );
@@ -2529,6 +2563,7 @@ function EventEditor({
           ? (item?.paidAt ?? new Date().toISOString())
           : null,
       escalationEnabled,
+      sensitive,
       priority,
       status,
       allDay,
@@ -3049,6 +3084,17 @@ function EventEditor({
                 </span>
               </label>
             </fieldset>
+            <label className="check-field">
+              <input
+                type="checkbox"
+                checked={sensitive}
+                onChange={(event) => setSensitive(event.target.checked)}
+              />
+              <span>
+                Sensitive event · excluded from Atlas by default and minimized
+                in briefs
+              </span>
+            </label>
           </div>
         ) : null}
         {formError ? (

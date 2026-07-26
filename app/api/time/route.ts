@@ -1,4 +1,5 @@
 import { listCalendarPayload } from "../../../db/time-repository";
+import { listCalendarSources } from "../../../db/calendar-intelligence-repository";
 import { ValidationError } from "../../../lib/domain/validation";
 import { daysBetween } from "../../../lib/time/rules";
 import type { CalendarFilters } from "../../../lib/time/types";
@@ -104,8 +105,28 @@ export async function GET(request: Request) {
           timeZone: requestedTimeZone,
         }).resolvedOptions().timeZone
       : undefined;
+    const [payload, sources] = await Promise.all([
+      listCalendarPayload(start, end, filters, displayTimeZone),
+      listCalendarSources(),
+    ]);
+    const visibleSources = new Set(
+      sources.filter((source) => source.visible).map((source) => source.id),
+    );
+    payload.events = payload.events.filter(
+      (event) =>
+        event.source === "local" ||
+        (event.sourceId !== null && visibleSources.has(event.sourceId)),
+    );
+    payload.sourceLabel = sources.some(
+      (source) => source.provider !== "nexus" && source.visible,
+    )
+      ? "Nexus + connected calendars"
+      : "Private local workspace";
+    payload.syncAvailable = sources.some(
+      (source) => source.provider !== "nexus" && source.visible,
+    );
     return Response.json(
-      await listCalendarPayload(start, end, filters, displayTimeZone),
+      payload,
       {
         headers: {
           "Cache-Control": "no-store",
