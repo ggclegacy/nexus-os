@@ -844,18 +844,30 @@ function TimelinePanel({
                       />
                     )
                   ) : null}
-                  <Button
-                    variant="icon"
-                    aria-label={`Edit ${item.title}`}
-                    onClick={() => onEdit(item)}
-                    icon={<Pencil aria-hidden="true" />}
-                  />
-                  <Button
-                    variant="icon"
-                    aria-label={`Delete ${item.title}`}
-                    onClick={() => onDelete(item)}
-                    icon={<Trash2 aria-hidden="true" />}
-                  />
+                  {item.isRecurring || item.kind === "routine" ? (
+                    <Link
+                      className="text-link"
+                      href={`/calendar?view=day&date=${item.localDate}`}
+                      aria-label={`Open ${item.title} in Calendar`}
+                    >
+                      Review in Calendar
+                    </Link>
+                  ) : (
+                    <>
+                      <Button
+                        variant="icon"
+                        aria-label={`Edit ${item.title}`}
+                        onClick={() => onEdit(item)}
+                        icon={<Pencil aria-hidden="true" />}
+                      />
+                      <Button
+                        variant="icon"
+                        aria-label={`Delete ${item.title}`}
+                        onClick={() => onDelete(item)}
+                        icon={<Trash2 aria-hidden="true" />}
+                      />
+                    </>
+                  )}
                 </div>
               </li>
             );

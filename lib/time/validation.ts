@@ -7,11 +7,7 @@ import type {
   RoutineOccurrenceStatus,
   TimePreferences,
 } from "./types";
-import {
-  assertDateKey,
-  assertTimeKey,
-  zonedDateTimeToUtc,
-} from "./rules";
+import { assertDateKey, assertTimeKey, zonedDateTimeToUtc } from "./rules";
 
 const MAX_TITLE = 160;
 const MAX_NOTES = 4_000;
@@ -86,7 +82,9 @@ function timeZone(value: unknown) {
 export function parseRecurrence(value: unknown): RecurrenceRule | null {
   if (value === null || value === undefined || value === "") return null;
   const input = record(value);
-  if (!["daily", "weekly", "monthly", "yearly"].includes(String(input.frequency))) {
+  if (
+    !["daily", "weekly", "monthly", "yearly"].includes(String(input.frequency))
+  ) {
     throw new ValidationError("Recurrence frequency is invalid.");
   }
   const interval = Number(input.interval ?? 1);
@@ -145,10 +143,7 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
   const input = record(value);
   const allDay = Boolean(input.allDay);
   const localDate = date(input.localDate, "Start date");
-  const endLocalDate = date(
-    input.endLocalDate ?? input.localDate,
-    "End date",
-  );
+  const endLocalDate = date(input.endLocalDate ?? input.localDate, "End date");
   if (endLocalDate < localDate) {
     throw new ValidationError("End date must not precede start date.");
   }
@@ -159,8 +154,18 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
     throw new ValidationError("Start and end times are required.");
   }
   if (!allDay && startTime && endTime) {
-    const startAt = zonedDateTimeToUtc(localDate, startTime, zone);
-    const endAt = zonedDateTimeToUtc(endLocalDate, endTime, zone);
+    let startAt: string;
+    let endAt: string;
+    try {
+      startAt = zonedDateTimeToUtc(localDate, startTime, zone);
+      endAt = zonedDateTimeToUtc(endLocalDate, endTime, zone);
+    } catch (error) {
+      throw new ValidationError(
+        error instanceof Error
+          ? error.message
+          : "The event time is invalid for its time zone.",
+      );
+    }
     if (Date.parse(endAt) <= Date.parse(startAt)) {
       throw new ValidationError("Event end must be after its start.");
     }
@@ -170,6 +175,10 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
   )
     ? (input.status as CalendarEventInput["status"])
     : "confirmed";
+  const recurrence = parseRecurrence(input.recurrence);
+  if (recurrence?.until && recurrence.until < localDate) {
+    throw new ValidationError("Recurrence end must not precede its start.");
+  }
   return {
     title: requiredText(input.title, "Event title", MAX_TITLE),
     notes: optionalText(input.notes, "Notes", MAX_NOTES),
@@ -185,7 +194,7 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
     startTime,
     endTime,
     timeZone: zone,
-    recurrence: parseRecurrence(input.recurrence),
+    recurrence,
     reminderOffsets: reminderOffsets(input.reminderOffsets),
   };
 }
@@ -224,6 +233,14 @@ export function parseRoutine(value: unknown): RoutineInput {
     : "active";
   const schedule = parseRecurrence(input.schedule);
   if (!schedule) throw new ValidationError("Routine schedule is required.");
+  const startDate = date(input.startDate, "Start date");
+  const endDate = optionalDate(input.endDate, "End date");
+  if (endDate && endDate < startDate) {
+    throw new ValidationError("Routine end must not precede its start.");
+  }
+  if (schedule.until && schedule.until < startDate) {
+    throw new ValidationError("Routine recurrence end must not precede start.");
+  }
   const reminderOffset =
     input.reminderOffsetMinutes === null ||
     input.reminderOffsetMinutes === undefined ||
@@ -246,8 +263,8 @@ export function parseRoutine(value: unknown): RoutineInput {
     windowStart,
     windowEnd,
     expectedMinutes,
-    startDate: date(input.startDate, "Start date"),
-    endDate: optionalDate(input.endDate, "End date"),
+    startDate,
+    endDate,
     state,
     reminderEnabled: Boolean(input.reminderEnabled),
     reminderOffsetMinutes: reminderOffset,
@@ -256,7 +273,9 @@ export function parseRoutine(value: unknown): RoutineInput {
 
 export function parseOccurrenceUpdate(value: unknown) {
   const input = record(value);
-  if (!["upcoming", "due", "completed", "skipped"].includes(String(input.status))) {
+  if (
+    !["upcoming", "due", "completed", "skipped"].includes(String(input.status))
+  ) {
     throw new ValidationError("Routine occurrence status is invalid.");
   }
   return {

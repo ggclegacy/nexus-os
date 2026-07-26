@@ -43,6 +43,19 @@ function optionalIso(value: unknown, label: string): string | null {
   return new Date(value).toISOString();
 }
 
+function optionalText(value: unknown, max: number) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function optionalMinutes(value: unknown, label: string) {
+  if (value === null || value === undefined || value === "") return null;
+  const minutes = Number(value);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 43_200) {
+    throw new ValidationError(`${label} is invalid.`);
+  }
+  return minutes;
+}
+
 function timeZone(value: unknown) {
   if (typeof value !== "string" || !value) {
     throw new ValidationError("Time zone is required.");
@@ -57,22 +70,67 @@ function timeZone(value: unknown) {
 
 export function parsePriorityInput(value: unknown): PriorityInput {
   const input = record(value);
-  return {
+  const priority: PriorityInput = {
     title: text(input.title, "Priority", MAX_TITLE),
+    notes: optionalText(input.notes, MAX_NOTES),
     dueAt: optionalIso(input.dueAt, "Due time"),
+    isTop: input.isTop === undefined ? true : Boolean(input.isTop),
+    scheduledStartAt: optionalIso(input.scheduledStartAt, "Focus start"),
+    scheduledEndAt: optionalIso(input.scheduledEndAt, "Focus end"),
+    reminderEnabled: Boolean(input.reminderEnabled),
+    reminderOffsetMinutes: optionalMinutes(
+      input.reminderOffsetMinutes,
+      "Reminder timing",
+    ),
   };
+  if (
+    priority.scheduledStartAt &&
+    priority.scheduledEndAt &&
+    Date.parse(priority.scheduledEndAt) <= Date.parse(priority.scheduledStartAt)
+  ) {
+    throw new ValidationError("Focus time must end after it starts.");
+  }
+  return priority;
 }
 
 export function parsePriorityUpdate(value: unknown): PriorityUpdate {
   const input = record(value);
   const update: PriorityUpdate = {};
   if ("title" in input) update.title = text(input.title, "Priority", MAX_TITLE);
+  if ("notes" in input) update.notes = optionalText(input.notes, MAX_NOTES);
   if ("dueAt" in input) update.dueAt = optionalIso(input.dueAt, "Due time");
+  if ("isTop" in input) update.isTop = Boolean(input.isTop);
+  if ("scheduledStartAt" in input) {
+    update.scheduledStartAt = optionalIso(
+      input.scheduledStartAt,
+      "Focus start",
+    );
+  }
+  if ("scheduledEndAt" in input) {
+    update.scheduledEndAt = optionalIso(input.scheduledEndAt, "Focus end");
+  }
+  if ("archived" in input) update.archived = Boolean(input.archived);
+  if ("reminderEnabled" in input) {
+    update.reminderEnabled = Boolean(input.reminderEnabled);
+  }
+  if ("reminderOffsetMinutes" in input) {
+    update.reminderOffsetMinutes = optionalMinutes(
+      input.reminderOffsetMinutes,
+      "Reminder timing",
+    );
+  }
   if ("status" in input) {
     if (input.status !== "active" && input.status !== "completed") {
       throw new ValidationError("Priority status is invalid.");
     }
     update.status = input.status;
+  }
+  if (
+    update.scheduledStartAt &&
+    update.scheduledEndAt &&
+    Date.parse(update.scheduledEndAt) <= Date.parse(update.scheduledStartAt)
+  ) {
+    throw new ValidationError("Focus time must end after it starts.");
   }
   if (!Object.keys(update).length) {
     throw new ValidationError("No priority changes were provided.");

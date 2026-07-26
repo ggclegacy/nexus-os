@@ -6,34 +6,45 @@ import { fileURLToPath } from "node:url";
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const port = 31_000 + (process.pid % 1_000);
 const baseUrl = `http://127.0.0.1:${port}`;
+const renderTarget = process.env.NEXUS_RENDER_TARGET ?? "cloudflare";
 let worker;
 let workerOutput = "";
 
 before(async () => {
-  worker = spawn(
-    "npx",
-    [
-      "wrangler",
-      "dev",
-      "--config",
-      "dist/server/wrangler.json",
-      "--port",
-      String(port),
-      "--ip",
-      "127.0.0.1",
-      "--inspector-port",
-      "0",
-    ],
-    {
-      cwd: projectRoot,
-      env: {
-        ...process.env,
-        CI: "1",
-        WRANGLER_LOG_PATH: ".wrangler/wrangler-rendered-test.log",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+  const command = renderTarget === "vercel" ? "npm" : "npx";
+  const args =
+    renderTarget === "vercel"
+      ? [
+          "run",
+          "start:vercel",
+          "--",
+          "--hostname",
+          "127.0.0.1",
+          "--port",
+          String(port),
+        ]
+      : [
+          "wrangler",
+          "dev",
+          "--config",
+          "dist/server/wrangler.json",
+          "--port",
+          String(port),
+          "--ip",
+          "127.0.0.1",
+          "--inspector-port",
+          "0",
+        ];
+
+  worker = spawn(command, args, {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      CI: "1",
+      WRANGLER_LOG_PATH: ".wrangler/wrangler-rendered-test.log",
     },
-  );
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   worker.stdout.on("data", (chunk) => {
     workerOutput += chunk;
   });
@@ -44,17 +55,17 @@ before(async () => {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (worker.exitCode !== null) {
-      throw new Error(`Production worker exited early.\n${workerOutput}`);
+      throw new Error(`Production server exited early.\n${workerOutput}`);
     }
     try {
       const response = await fetch(baseUrl);
       if (response.ok) return;
     } catch {
-      // The worker is still starting.
+      // The production server is still starting.
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Production worker did not become ready.\n${workerOutput}`);
+  throw new Error(`Production server did not become ready.\n${workerOutput}`);
 });
 
 after(async () => {
@@ -92,4 +103,14 @@ test("renders an honest unbuilt module destination", async () => {
   const html = await response.text();
   assert.match(html, /Atlas is not connected yet/);
   assert.match(html, /no fake records/i);
+});
+
+test("server-renders the personal Calendar workspace", async () => {
+  const response = await render("/calendar?view=agenda&date=2026-07-26");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<title>Calendar \| Nexus OS<\/title>/i);
+  assert.match(html, /Personal time/);
+  assert.match(html, /Loading personal time/);
+  assert.match(html, /External sync not connected/);
 });

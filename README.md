@@ -1,7 +1,9 @@
 # Nexus OS
 
-Nexus OS is a private personal command system. Phase 1 provides the shared
-application foundation, responsive shell, and functional Command Center.
+Nexus OS is a private personal command system. Phases 1 and 2 provide the
+shared application foundation, responsive Command Center, and a functional
+personal time system for events, priorities, routines, reminders, and quiet
+hours.
 
 ## Local development
 
@@ -20,15 +22,39 @@ npm run dev
 Open `http://localhost:3000`.
 
 The development server uses a project-local Cloudflare D1 database. Command
-Center priorities, timeline items, and quick captures persist locally under the
-ignored `.wrangler` directory. This is local development persistence, not cloud
-sync.
+Center and Calendar read from the same canonical priority, event, and routine
+records under the ignored `.wrangler` directory. This is local development
+persistence, not cloud sync. Calendar states this boundary explicitly; no
+external provider is connected.
 
 To run an existing production build locally:
 
 ```sh
 npm run build
 npm run start
+```
+
+## Vercel deployment
+
+The repository is also configured for a standard Next.js deployment on
+Vercel. The Vercel build uses Turso/libSQL for the same SQLite data model that
+the local Cloudflare build stores in D1.
+
+1. Import `ggclegacy/nexus-os` into Vercel.
+2. Add the Turso integration from the Vercel Marketplace to the project. It
+   supplies `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`.
+3. Deploy. `vercel.json` selects the verified `npm run build:vercel` build.
+
+For a manually managed Turso database, add those two environment variables in
+Vercel using `.env.example` as the reference. The application initializes an
+empty database on the first API request.
+
+To exercise the Vercel runtime locally, omit `TURSO_DATABASE_URL` to use the
+ignored `local.db` file:
+
+```sh
+npm run dev:vercel
+npm run test:rendered:vercel
 ```
 
 ## Verification
@@ -42,6 +68,7 @@ npm run test:accessibility
 npm run test:e2e
 npm run build
 npm run test:rendered
+npm run test:rendered:vercel
 ```
 
 Generate a migration after changing `db/schema.ts`:
@@ -52,5 +79,5 @@ npm run db:generate
 
 ## Current scope
 
-Command is functional. Other destinations intentionally show an honest
-not-built-yet state until their approved roadmap phases are implemented.
+Command and Calendar are functional. Other destinations intentionally show an
+honest not-built-yet state until their approved roadmap phases are implemented.

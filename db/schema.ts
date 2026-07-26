@@ -31,7 +31,11 @@ export const priorities = sqliteTable(
     completedAt: text("completed_at"),
   },
   (table) => [
-    index("priorities_status_position_idx").on(table.status, table.position),
+    index("priorities_top_position_idx").on(
+      table.status,
+      table.isTop,
+      table.position,
+    ),
     index("priorities_due_at_idx").on(table.dueAt),
     check(
       "priorities_status_check",
@@ -78,10 +82,7 @@ export const timelineItems = sqliteTable(
   },
   (table) => [
     index("timeline_local_date_idx").on(table.localDate, table.startAt),
-    index("timeline_recurrence_range_idx").on(
-      table.localDate,
-      table.deletedAt,
-    ),
+    index("timeline_recurrence_range_idx").on(table.localDate, table.deletedAt),
     check(
       "timeline_kind_check",
       sql`${table.kind} in ('event', 'all-day', 'routine')`,

@@ -1,4 +1,5 @@
 import vinext from "vinext";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 import { sites } from "./build/sites-vite-plugin";
@@ -10,6 +11,9 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const cloudflareDatabaseModule = fileURLToPath(
+  new URL("./db/database.cloudflare.ts", import.meta.url),
+);
 
 const localBindingConfig = {
   main: "./worker/index.ts",
@@ -44,6 +48,11 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    resolve: {
+      alias: {
+        "./database": cloudflareDatabaseModule,
+      },
+    },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

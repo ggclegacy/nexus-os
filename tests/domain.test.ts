@@ -78,7 +78,13 @@ describe("boundary validation", () => {
   it("normalizes priority input and rejects missing values", () => {
     expect(parsePriorityInput({ title: "  Train with intent  " })).toEqual({
       title: "Train with intent",
+      notes: "",
       dueAt: null,
+      isTop: true,
+      scheduledStartAt: null,
+      scheduledEndAt: null,
+      reminderEnabled: false,
+      reminderOffsetMinutes: null,
     });
     expect(() => parsePriorityInput({ title: " " })).toThrow(ValidationError);
   });

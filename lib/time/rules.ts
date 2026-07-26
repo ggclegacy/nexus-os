@@ -62,7 +62,11 @@ export function dateRange(start: string, end: string, limit = 400) {
   assertDateKey(end);
   if (start > end) throw new Error("Range end must not precede range start.");
   const values: string[] = [];
-  for (let date = start; date <= end && values.length < limit; date = addDays(date, 1)) {
+  for (
+    let date = start;
+    date <= end && values.length < limit;
+    date = addDays(date, 1)
+  ) {
     values.push(date);
   }
   if (values.at(-1) !== end) throw new Error("Date range is too large.");
@@ -93,8 +97,7 @@ function matchesMonthly(
   const source = relativeWeekday(start);
   const candidate = relativeWeekday(date);
   return (
-    source.weekday === candidate.weekday &&
-    source.ordinal === candidate.ordinal
+    source.weekday === candidate.weekday && source.ordinal === candidate.ordinal
   );
 }
 
@@ -140,7 +143,13 @@ export function expandRecurrence(
   const end = rule.until && rule.until < rangeEnd ? rule.until : rangeEnd;
   const results: string[] = [];
   let seen = 0;
-  for (const date of dateRange(start, end, 3_700)) {
+  // Without a count limit, matching is deterministic from the original start,
+  // so there is no reason to walk historical days before the viewed range.
+  // Count-limited rules retain their bounded history scan (at most 100 years).
+  const scanStart =
+    rule.count === null && rangeStart > start ? rangeStart : start;
+  if (end < scanStart) return [];
+  for (const date of dateRange(scanStart, end, 36_600)) {
     if (!matchesRule(start, date, rule)) continue;
     seen += 1;
     if (rule.count !== null && seen > rule.count) break;
@@ -277,7 +286,11 @@ export function recurrenceLabel(rule: RecurrenceRule | null) {
   if (rule.frequency === "daily")
     return rule.interval === 1 ? "Every day" : `${every} days`;
   if (rule.frequency === "weekly") {
-    if (rule.weekdays.length === 5 && !rule.weekdays.includes(0) && !rule.weekdays.includes(6))
+    if (
+      rule.weekdays.length === 5 &&
+      !rule.weekdays.includes(0) &&
+      !rule.weekdays.includes(6)
+    )
       return "Weekdays";
     return rule.interval === 1 ? "Every week" : `${every} weeks`;
   }

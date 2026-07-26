@@ -4,19 +4,11 @@ export type CalendarView = "agenda" | "day" | "week";
 export type TimeArea = CalendarView | "priorities" | "routines";
 export type EventStatus = "confirmed" | "tentative" | "canceled";
 export type SyncConflictState = "none" | "local-newer" | "remote-newer";
-export type RecurrenceFrequency =
-  | "daily"
-  | "weekly"
-  | "monthly"
-  | "yearly";
+export type RecurrenceFrequency = "daily" | "weekly" | "monthly" | "yearly";
 export type RecurrenceEditScope = "occurrence" | "future" | "series";
 export type RoutineState = "active" | "paused" | "archived";
 export type RoutineOccurrenceStatus =
-  | "upcoming"
-  | "due"
-  | "completed"
-  | "skipped"
-  | "missed";
+  "upcoming" | "due" | "completed" | "skipped" | "missed";
 export type ReminderEntity = "event" | "priority" | "routine";
 export type ReminderChannel = "in-app";
 export type ReminderQuietBehavior = "delay" | "suppress" | "allow";

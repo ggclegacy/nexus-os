@@ -16,7 +16,10 @@ export function jsonError(error: unknown) {
     error instanceof Error
       ? error.message
       : "The request could not be completed.";
-  const status = message.includes("before adding another") ? 409 : 500;
+  const status =
+    message.includes("top priority") || message.includes("promoting another")
+      ? 409
+      : 500;
   return Response.json(
     {
       error:

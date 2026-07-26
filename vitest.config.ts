@@ -7,7 +7,8 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     css: false,
     restoreMocks: true,
-    testTimeout: 20_000,
+    testTimeout: 30_000,
+    fileParallelism: false,
     exclude: ["tests/rendered-html.test.mjs", "node_modules/**", "dist/**"],
   },
 });

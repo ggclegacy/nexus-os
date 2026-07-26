@@ -8,7 +8,19 @@ import type {
   TimelineUpdate,
 } from "../lib/domain/types";
 import type { CommandApi } from "../lib/client/command-api";
+import { ApiConflictError, type TimeApi } from "../lib/client/time-api";
 import { buildAlerts, buildDailyBriefing } from "../lib/domain/briefing";
+import type {
+  CalendarEvent,
+  CalendarEventInput,
+  CalendarFilters,
+  CalendarPayload,
+  RecurrenceEditScope,
+  Routine,
+  RoutineInput,
+  RoutineOccurrence,
+  TimePreferences,
+} from "../lib/time/types";
 
 const now = "2026-07-26T14:00:00.000Z";
 
@@ -72,6 +84,14 @@ export class FakeCommandApi implements CommandApi {
   }
 
   async createPriority(input: PriorityInput) {
+    if (
+      input.isTop !== false &&
+      this.priorities.filter(
+        (item) => item.status === "active" && item.isTop !== false,
+      ).length >= 3
+    ) {
+      throw new Error("Only three active priorities can be in the top three.");
+    }
     const timestamp = new Date().toISOString();
     const priority: Priority = {
       id: `priority-${this.priorities.length + 1}`,
@@ -163,4 +183,248 @@ export class FakeCommandApi implements CommandApi {
   }
 
   async createCapture() {}
+}
+
+export class FakeTimeApi implements TimeApi {
+  events: CalendarEvent[] = [];
+  priorities: Priority[] = [];
+  routines: Routine[] = [];
+  occurrences: RoutineOccurrence[] = [];
+  preferences: TimePreferences = {
+    timeZone: "America/Chicago",
+    locale: "en-US",
+    weekStartsOn: 1,
+    hourCycle: "12",
+    quietHoursEnabled: false,
+    quietHoursStart: "22:00",
+    quietHoursEnd: "07:00",
+    quietBehavior: "delay",
+    notificationPermission: "in-app-only",
+    updatedAt: now,
+  };
+  failLoad = false;
+  conflictOnCreate = false;
+  lastEventScope: RecurrenceEditScope | null = null;
+
+  async load(
+    start: string,
+    end: string,
+    filters: CalendarFilters,
+  ): Promise<CalendarPayload> {
+    if (this.failLoad) throw new Error("Simulated Calendar failure.");
+    const query = filters.query.toLowerCase();
+    return {
+      rangeStart: start,
+      rangeEnd: end,
+      events: filters.includeEvents
+        ? this.events.filter(
+            (item) =>
+              !query ||
+              item.title.toLowerCase().includes(query) ||
+              item.notes.toLowerCase().includes(query),
+          )
+        : [],
+      priorities: filters.includePriorities ? [...this.priorities] : [],
+      routines: filters.includeRoutines ? [...this.routines] : [],
+      occurrences: filters.includeRoutines ? [...this.occurrences] : [],
+      reminders: [],
+      preferences: this.preferences,
+      sourceLabel: "Private local workspace",
+      lastUpdatedAt: new Date().toISOString(),
+      stale: false,
+      syncAvailable: false,
+    };
+  }
+
+  async createEvent(input: CalendarEventInput, acknowledgeConflict = false) {
+    if (this.conflictOnCreate && !acknowledgeConflict) {
+      throw new ApiConflictError("Review this overlap.", [
+        {
+          id: "existing-event",
+          title: "Existing commitment",
+          startAt: "2026-07-26T14:00:00.000Z",
+          endAt: "2026-07-26T15:00:00.000Z",
+        },
+      ]);
+    }
+    const timestamp = new Date().toISOString();
+    const id = `event-${this.events.length + 1}`;
+    const event: CalendarEvent = {
+      id,
+      occurrenceKey: input.recurrence ? `${id}:${input.localDate}` : id,
+      occurrenceDate: input.localDate,
+      seriesId: input.recurrence ? id : null,
+      title: input.title,
+      notes: input.notes,
+      location: input.location,
+      category: input.category,
+      status: input.status,
+      allDay: input.allDay,
+      localDate: input.localDate,
+      endLocalDate: input.endLocalDate,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      startAt: input.allDay
+        ? null
+        : `${input.localDate}T${input.startTime}:00.000Z`,
+      endAt: input.allDay
+        ? null
+        : `${input.endLocalDate}T${input.endTime}:00.000Z`,
+      timeZone: input.timeZone,
+      recurrence: input.recurrence,
+      reminderOffsets: input.reminderOffsets,
+      source: "local",
+      sourceId: null,
+      externalCalendarId: null,
+      lastSyncedAt: null,
+      localVersion: 1,
+      remoteVersion: null,
+      readOnly: false,
+      conflictState: "none",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.events.push(event);
+    return event;
+  }
+
+  async updateEvent(
+    id: string,
+    occurrenceDate: string,
+    scope: RecurrenceEditScope,
+    input: CalendarEventInput,
+  ) {
+    this.lastEventScope = scope;
+    const current = this.events.find(
+      (item) => item.id === id && item.occurrenceDate === occurrenceDate,
+    );
+    if (!current) throw new Error("Event not found.");
+    Object.assign(current, input, { updatedAt: new Date().toISOString() });
+    return current;
+  }
+
+  async deleteEvent(
+    id: string,
+    _occurrenceDate: string,
+    scope: RecurrenceEditScope,
+  ) {
+    this.lastEventScope = scope;
+    this.events = this.events.filter((item) => item.id !== id);
+  }
+
+  async createPriority(input: PriorityInput) {
+    const timestamp = new Date().toISOString();
+    const priority: Priority = {
+      id: `priority-${this.priorities.length + 1}`,
+      title: input.title,
+      notes: input.notes ?? "",
+      dueAt: input.dueAt ?? null,
+      status: "active",
+      position: this.priorities.length,
+      isTop: input.isTop ?? true,
+      scheduledStartAt: input.scheduledStartAt ?? null,
+      scheduledEndAt: input.scheduledEndAt ?? null,
+      reminderEnabled: input.reminderEnabled ?? false,
+      reminderOffsetMinutes: input.reminderOffsetMinutes ?? null,
+      source: "local",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: null,
+    };
+    this.priorities.push(priority);
+    return priority;
+  }
+
+  async updatePriority(id: string, update: PriorityUpdate) {
+    const priority = this.priorities.find((item) => item.id === id);
+    if (!priority) throw new Error("Priority not found.");
+    if (
+      update.isTop === true &&
+      priority.isTop === false &&
+      this.priorities.filter(
+        (item) => item.status === "active" && item.isTop !== false,
+      ).length >= 3
+    ) {
+      throw new Error("Only three active priorities can be in the top three.");
+    }
+    Object.assign(priority, update, { updatedAt: new Date().toISOString() });
+    return priority;
+  }
+
+  async deletePriority(id: string) {
+    this.priorities = this.priorities.filter((item) => item.id !== id);
+  }
+
+  async reorderPriorities(ids: string[]) {
+    this.priorities.forEach((item) => {
+      if (ids.includes(item.id)) item.position = ids.indexOf(item.id);
+    });
+    return this.priorities;
+  }
+
+  async createRoutine(input: RoutineInput) {
+    const timestamp = new Date().toISOString();
+    const routine: Routine = {
+      id: `routine-${this.routines.length + 1}`,
+      ...input,
+      source: "local",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.routines.push(routine);
+    this.occurrences.push({
+      id: `occurrence-${routine.id}-${input.startDate}`,
+      routineId: routine.id,
+      routineName: routine.name,
+      scheduledDate: input.startDate,
+      scheduledAt: input.preferredTime
+        ? `${input.startDate}T${input.preferredTime}:00.000Z`
+        : null,
+      windowStartAt: input.windowStart
+        ? `${input.startDate}T${input.windowStart}:00.000Z`
+        : null,
+      windowEndAt: input.windowEnd
+        ? `${input.startDate}T${input.windowEnd}:00.000Z`
+        : null,
+      status: "due",
+      completedAt: null,
+      note: "",
+      source: "local",
+      updatedAt: timestamp,
+    });
+    return routine;
+  }
+
+  async updateRoutine(id: string, input: RoutineInput) {
+    const routine = this.routines.find((item) => item.id === id);
+    if (!routine) throw new Error("Routine not found.");
+    Object.assign(routine, input, { updatedAt: new Date().toISOString() });
+    return routine;
+  }
+
+  async archiveRoutine(id: string) {
+    const routine = this.routines.find((item) => item.id === id);
+    if (routine) routine.state = "archived";
+  }
+
+  async updateOccurrence(
+    routineId: string,
+    scheduledDate: string,
+    status: "upcoming" | "due" | "completed" | "skipped",
+    note = "",
+  ) {
+    const occurrence = this.occurrences.find(
+      (item) =>
+        item.routineId === routineId && item.scheduledDate === scheduledDate,
+    );
+    if (!occurrence) throw new Error("Occurrence not found.");
+    occurrence.status = status;
+    occurrence.note = note;
+    return occurrence;
+  }
+
+  async updatePreferences(input: TimePreferences) {
+    this.preferences = { ...input, updatedAt: new Date().toISOString() };
+    return this.preferences;
+  }
 }

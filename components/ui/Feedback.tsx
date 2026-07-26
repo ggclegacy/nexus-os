@@ -21,15 +21,18 @@ export function EmptyState({
   title,
   detail,
   action,
+  headingLevel = 3,
 }: {
   title: string;
   detail: string;
   action?: React.ReactNode;
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     <div className="state state--empty">
       <div>
-        <h3>{title}</h3>
+        <Heading>{title}</Heading>
         <p>{detail}</p>
       </div>
       {action}

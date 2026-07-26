@@ -8,14 +8,26 @@ import type {
 
 export interface CommandSources {
   priorities(): Promise<Priority[]>;
-  timeline(localDate: string): Promise<TimelineItem[]>;
+  timeline(localDate: string, timeZone: string): Promise<TimelineItem[]>;
 }
 
 const defaultSources: CommandSources = {
   priorities: async () =>
-    (await import("../../db/command-repository")).listPriorities(),
-  timeline: async (localDate) =>
-    (await import("../../db/command-repository")).listTimeline(localDate),
+    (await import("../../db/time-repository"))
+      .listTimePriorities()
+      .then((priorities) =>
+        priorities.filter(
+          (priority) =>
+            priority.status === "active" &&
+            priority.isTop !== false &&
+            !priority.archivedAt,
+        ),
+      ),
+  timeline: async (localDate, timeZone) =>
+    (await import("../../db/time-repository")).listCommandTimeline(
+      localDate,
+      timeZone,
+    ),
 };
 
 function result<T>(
@@ -45,7 +57,7 @@ export async function assembleCommandData(
 ): Promise<CommandData> {
   const [prioritiesSettled, timelineSettled] = await Promise.allSettled([
     sources.priorities(),
-    sources.timeline(localDate),
+    sources.timeline(localDate, timeZone),
   ]);
 
   const priorities = result(prioritiesSettled, [] as Priority[]);

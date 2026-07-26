@@ -1,7 +1,9 @@
 # Nexus OS implementation map
 
-**Audit date:** July 26, 2026  
-**Roadmap status:** Phases 0 and 1 complete; Phases 2–12 not started  
+**Audit date:** July 26, 2026
+
+**Roadmap status:** Phases 0–2 complete; Phases 3–12 not started
+
 **Scope:** Local workspace `/Users/neil/Desktop/nexus-os`
 
 This map records the implementation that exists in the local workspace. It does
@@ -24,24 +26,24 @@ The protected `icon.png` remains byte-for-byte unchanged. Its SHA-256 is
 `e77502c093ca5d7b8994aa13fee310ef8e8a5cab4c4b6a3f33dbdec5d1a9ae4c`.
 Optimized 96 px and 192 px derivatives are served from `public/`.
 
-## 2. Phase 1 application inventory
+## 2. Phase 1–2 application inventory
 
 ### Routes
 
-| Route        | State                      |
-| ------------ | -------------------------- |
-| `/`          | Functional Command Center  |
-| `/protocol`  | Honest not-built-yet state |
-| `/fitness`   | Honest not-built-yet state |
-| `/sleep`     | Honest not-built-yet state |
-| `/nutrition` | Honest not-built-yet state |
-| `/mindset`   | Honest not-built-yet state |
-| `/finance`   | Honest not-built-yet state |
-| `/calendar`  | Honest not-built-yet state |
-| `/atlas`     | Honest unavailable state   |
-| `/vault`     | Honest not-built-yet state |
-| `/life`      | Honest not-built-yet state |
-| `/settings`  | Honest not-built-yet state |
+| Route        | State                           |
+| ------------ | ------------------------------- |
+| `/`          | Functional Command Center       |
+| `/protocol`  | Honest not-built-yet state      |
+| `/fitness`   | Honest not-built-yet state      |
+| `/sleep`     | Honest not-built-yet state      |
+| `/nutrition` | Honest not-built-yet state      |
+| `/mindset`   | Honest not-built-yet state      |
+| `/finance`   | Honest not-built-yet state      |
+| `/calendar`  | Functional personal time system |
+| `/atlas`     | Honest unavailable state        |
+| `/vault`     | Honest not-built-yet state      |
+| `/life`      | Honest not-built-yet state      |
+| `/settings`  | Honest not-built-yet state      |
 
 The responsive shell provides desktop sidebar, tablet header/drawer, and mobile
 bottom navigation patterns. It includes the full module map, private-local
@@ -60,24 +62,55 @@ status, Atlas entry, settings entry, skip navigation, and Quick Add.
 - Quick Capture persisted to the local database
 - Loading, refreshing, empty, partial, stale, offline, recoverable error, toast,
   dialog validation, and focus states
+- Calendar-backed events and routines plus the same canonical top-three
+  priorities, with recurring changes routed to Calendar for explicit scope
+
+### Personal time
+
+- Agenda, Day, Week, Priorities, and Routines workspaces with URL-backed view
+  and date state
+- Timed, all-day, multi-day, and recurring personal events with daily, weekly,
+  monthly date/relative, and yearly rules; interval, until, and occurrence-count
+  endings; and explicit this/future/series edit scope
+- Time-zone-aware conversion, daylight-saving gap rejection, fixed all-day
+  dates, overlap review, event status, location, notes, category, and in-app
+  reminder configuration
+- Expanded priority workspace with top-three enforcement, regular active
+  priorities, ordering, completion/restore, due rollover, notes, focus blocks,
+  reminder offsets, delete, and undo
+- Routine definitions and occurrence history with active/paused/archived
+  states, flexible or preferred time, windows, duration, reminder settings,
+  complete/skip/restore, and occurrence notes
+- Configurable time zone, week start, 12/24-hour clock, overnight quiet hours,
+  quiet behavior, and truthful permission/provider states
+- Responsive week reflow and mobile stacking without horizontal page overflow
 
 ### Shared implementation
 
 - `components/shell`: responsive application shell and navigation
 - `components/ui`: button, panel, badge, dialog, feedback, and toast primitives
-- `lib/domain`: types, input validation, and briefing/alert rules
-- `lib/client`: typed browser API adapter
+- `lib/domain` and `lib/time`: types, validation, recurrence, time-zone,
+  reminder, routine-state, briefing, and alert rules
+- `lib/client`: typed Command and personal-time API adapters
 - `lib/server`: Command composition and HTTP error boundary
-- `db`: D1 repository and Drizzle schema
-- `app/api`: Command, priority, timeline, and capture endpoints
+- `db`: shared Command/time D1 repositories and Drizzle schema
+- `app/api`: Command, event, priority, routine, occurrence, preference,
+  timeline, and capture endpoints
 - `tests`: domain, workflow, accessibility, and rendered-output checks
 
 ## 3. Data and trust boundaries
 
-Priorities, timeline items, and quick captures are stored in a project-local D1
-database under the ignored `.wrangler` directory. All API writes are parsed and
-validated on the server. SQL statements use prepared bindings. The active
-top-three priority rule is also enforced by the repository.
+Priorities, canonical timeline events, recurrence exceptions, routines,
+occurrence history, reminders, preferences, and quick captures are stored in a
+project-local D1 database under the ignored `.wrangler` directory. All API
+writes are parsed and validated on the server. SQL statements use prepared
+bindings. The active top-three rule and explicit recurring edit scope are also
+enforced by the repository.
+
+Legacy Phase 1 routine rows are migrated idempotently into routine definitions
+and occurrence history. Their source rows remain as inactive recovery evidence,
+marked with the destination routine ID. Phase 2 extends canonical priorities and
+timeline events in place rather than creating competing data sources.
 
 Command surfaces are composed independently. A failed source can return an
 explicit partial state without fabricating values for the remaining surfaces.
@@ -98,8 +131,9 @@ accent system or added grain texture is implemented.
 
 The UI uses semantic landmarks, headings, labels, live regions, focus
 management, visible focus styling, reduced-motion handling, reflow breakpoints,
-and minimum touch targets. Automated `jest-axe` coverage passes for the empty
-Command state, and workflow tests cover keyboard access to the primary action.
+and minimum touch targets. Automated `jest-axe` coverage passes for empty
+Command and Calendar states, and workflow tests cover keyboard access and core
+personal-time mutation paths.
 Final subjective and device-specific visual inspection remains a user-owned
 acceptance step.
 
@@ -111,8 +145,25 @@ The initial migration creates:
 - `timeline_items` with kind/status checks and a local-date/start-time index
 - `quick_captures`
 
+The additive Phase 2 migration:
+
+- extends `priorities` with notes, top-three membership, focus time, archive,
+  and reminder fields
+- extends canonical `timeline_items` with event details, recurrence,
+  source/version/sync placeholders, conflict state, and soft deletion
+- creates `event_exceptions`, `routines`, `routine_occurrences`, `reminders`,
+  and `time_preferences`
+- does not drop or replace Phase 1 priority or timeline tables
+
 The repository initializes the same schema defensively in local development.
 Drizzle schema changes must be followed by `npm run db:generate`.
+
+Recovery is additive: a database backup can restore the complete Phase 1 state,
+and legacy routine timeline rows are retained with `migrated_to_routine_id`
+rather than erased. Rolling application code back to Phase 1 leaves its
+original columns and rows readable; Phase 1 simply ignores the added columns
+and tables. The generated migration intentionally contains no `DROP TABLE` or
+data deletion for canonical Phase 1 stores.
 
 ## 6. Verification contract
 
@@ -132,16 +183,32 @@ npm audit --omit=dev
 npm run dev
 ```
 
-Phase 1 verification on July 26, 2026 produced:
+Phase 2 verification on July 26, 2026 produced:
 
 - Formatting, strict type checking, and lint: passed
-- Vitest: 3 files and 11 tests passed
-- Accessibility: no automated violations in the covered Command state
-- Workflow coverage: priority, timeline, recovery, and keyboard paths passed
+- Vitest: 6 files and 30 tests passed
+- Accessibility: no automated violations in covered empty Command and Calendar
+  states
+- End-to-end component coverage: 2 files and 12 workflows passed, including
+  timed/all-day/recurring events, explicit occurrence/future/series scope,
+  top-three priority behavior, routine occurrence history, reminder settings,
+  overlap acknowledgement, offline state, and recovery
+- Time tests: DST gap/fall-back, cross-zone date display, all-day stability,
+  overnight events and quiet hours, month/year/leap boundaries, relative
+  monthly recurrence, occurrence counts, and bounded dense expansion passed
+- Migration safety tests: additive Phase 2 schema and Phase 1 canonical-table
+  preservation passed; `db:generate` reports no ungenerated schema changes
 - Production build: passed
-- Rendered Worker output: Command shell and honest Atlas destination passed
-- Local D1 API: create/update/delete priority, create/delete timeline, and
-  create quick capture passed; disposable records were removed afterward
+- Rendered Worker output: Command, Calendar, and honest Atlas destination passed
+- Local D1 API: recurring event, focused priority, routine, reminders,
+  occurrence completion/note, Command synchronization, and safe delete/archive
+  paths passed; exact cleanup returned zero disposable records
+- Warm local responses: Command page 214 ms, Calendar page 365 ms, Calendar API
+  87 ms, and Command API 70 ms in the development server
+- Calendar client chunk: 59 KB raw and approximately 14.9 KB gzip
+- Protected emblem SHA-256 remained
+  `e77502c093ca5d7b8994aa13fee310ef8e8a5cab4c4b6a3f33dbdec5d1a9ae4c`;
+  prohibited-color/texture term scan returned no implementation matches
 - Production dependency audit: zero known vulnerabilities
 
 The full development dependency audit still reports the upstream
@@ -155,7 +222,7 @@ This affects local lint tooling rather than the production dependency graph.
 | ----- | --------------------------------------------- | ----------- | ------------------------------- |
 | 0     | Repository audit and implementation map       | Complete    | Baseline recorded               |
 | 1     | Foundation, app shell, and Command Center v1  | Complete    | Functional local vertical slice |
-| 2     | Calendar, priorities, routines, and reminders | Not started | Prepared route only             |
+| 2     | Calendar, priorities, routines, and reminders | Complete    | Functional local vertical slice |
 | 3     | Protocol                                      | Not started | Prepared route only             |
 | 4     | Fitness                                       | Not started | Prepared route only             |
 | 5     | Sleep and Recovery                            | Not started | Prepared route only             |

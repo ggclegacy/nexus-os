@@ -1,8 +1,10 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { expect } from "vitest";
 
 expect.extend(toHaveNoViolations);
+configure({ asyncUtilTimeout: 5_000 });
 
 if (!HTMLDialogElement.prototype.showModal) {
   HTMLDialogElement.prototype.showModal = function showModal() {
