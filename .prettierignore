@@ -1,0 +1,9 @@
+node_modules
+dist
+.next
+.vinext
+.wrangler
+drizzle/meta
+package-lock.json
+NEXUS_OS_CODEX_STANDARDS.md
+NEXUS_OS_IMPLEMENTATION_PROMPTS.md
