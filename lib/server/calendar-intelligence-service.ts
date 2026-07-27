@@ -32,7 +32,7 @@ export function calendarCapabilities(): CalendarCapabilities {
       model: atlas.configured ? atlas.model : null,
       reasonUnavailable: atlas.reasonUnavailable,
     },
-    reconciliation: "manual-and-on-open",
+    reconciliation: "manual",
     weather: false,
     travelTime: false,
     attachments: false,
@@ -73,11 +73,14 @@ export async function permittedAtlasEvents(start: string, end: string) {
     getCalendarPrivacySettings(),
   ]);
   const permitted = new Set(
-    sources.filter((source) => source.includeInAtlas).map((source) => source.id),
+    sources
+      .filter((source) => source.includeInAtlas)
+      .map((source) => source.id),
   );
   return events.filter(
     (event) =>
-      (event.source === "local" || (event.sourceId && permitted.has(event.sourceId))) &&
+      (event.source === "local" ||
+        (event.sourceId && permitted.has(event.sourceId))) &&
       (!event.sensitive || privacy.sensitiveEventsInAtlas),
   );
 }
@@ -92,7 +95,8 @@ export async function visibleCalendarEvents(start: string, end: string) {
   );
   return events.filter(
     (event) =>
-      event.source === "local" || (event.sourceId && visible.has(event.sourceId)),
+      event.source === "local" ||
+      (event.sourceId && visible.has(event.sourceId)),
   );
 }
 

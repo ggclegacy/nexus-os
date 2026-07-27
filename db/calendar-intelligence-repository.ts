@@ -320,15 +320,14 @@ export async function ensureCalendarIntelligenceSchema() {
     ]);
     const now = new Date().toISOString();
     await db.batch([
-      db
-        .prepare(
-          `INSERT OR IGNORE INTO calendar_sources
+      db.prepare(
+        `INSERT OR IGNORE INTO calendar_sources
            (id, connection_id, provider, external_calendar_id, display_name,
             access, visible, include_in_availability, include_in_atlas,
             is_default, sync_status, sync_cursor, last_synced_at, color_key)
            VALUES ('nexus', NULL, 'nexus', NULL, 'Nexus Calendar', 'write', 1,
                    1, 1, 1, 'healthy', NULL, NULL, 'gold')`,
-        ),
+      ),
       db
         .prepare(
           `INSERT OR IGNORE INTO calendar_privacy_settings
@@ -350,6 +349,7 @@ export async function listCalendarConnections() {
   const rows = await commandDatabase()
     .prepare(
       `SELECT * FROM calendar_connections
+       WHERE status != 'disconnected'
        ORDER BY provider ASC, account_email ASC`,
     )
     .all<ConnectionRow>();
@@ -381,10 +381,7 @@ export async function updateCalendarSource(
   update: Partial<
     Pick<
       CalendarSource,
-      | "visible"
-      | "includeInAvailability"
-      | "includeInAtlas"
-      | "isDefault"
+      "visible" | "includeInAvailability" | "includeInAtlas" | "isDefault"
     >
   >,
 ) {
@@ -393,9 +390,7 @@ export async function updateCalendarSource(
   if (!current) return null;
   const db = commandDatabase();
   if (update.isDefault === true) {
-    await db
-      .prepare("UPDATE calendar_sources SET is_default = 0")
-      .run();
+    await db.prepare("UPDATE calendar_sources SET is_default = 0").run();
   }
   await db
     .prepare(
@@ -418,9 +413,7 @@ export async function updateCalendarSource(
 export async function getCalendarPrivacySettings() {
   await ensureCalendarIntelligenceSchema();
   const row = await commandDatabase()
-    .prepare(
-      "SELECT * FROM calendar_privacy_settings WHERE id = 'default'",
-    )
+    .prepare("SELECT * FROM calendar_privacy_settings WHERE id = 'default'")
     .first<PrivacyRow>();
   if (!row) throw new Error("Calendar privacy settings are unavailable.");
   return {
@@ -605,6 +598,14 @@ export async function getCalendarAuditDetail(id: string) {
     : null;
 }
 
+export async function markCalendarAuditUndone(id: string) {
+  await ensureCalendarIntelligenceSchema();
+  await commandDatabase()
+    .prepare("UPDATE calendar_audit SET undo_available = 0 WHERE id = ?")
+    .bind(id)
+    .run();
+}
+
 export async function saveCalendarProposal(proposal: CalendarProposal) {
   await ensureCalendarIntelligenceSchema();
   const now = new Date().toISOString();
@@ -637,7 +638,9 @@ export async function getCalendarProposal(id: string) {
     .prepare("SELECT proposal_json FROM calendar_proposals WHERE id = ?")
     .bind(id)
     .first<{ proposal_json: string }>();
-  return row ? parseJson<CalendarProposal | null>(row.proposal_json, null) : null;
+  return row
+    ? parseJson<CalendarProposal | null>(row.proposal_json, null)
+    : null;
 }
 
 export async function upsertCalendarConnection(input: {
@@ -719,12 +722,7 @@ export async function updateConnectionCredential(
            last_error = NULL, updated_at = ?
        WHERE id = ?`,
     )
-    .bind(
-      encryptedAccessToken,
-      tokenExpiresAt,
-      new Date().toISOString(),
-      id,
-    )
+    .bind(encryptedAccessToken, tokenExpiresAt, new Date().toISOString(), id)
     .run();
 }
 
@@ -838,9 +836,7 @@ export async function getExternalEventLinkByExternal(
 export async function getExternalEventLinkByLocal(localEventId: string) {
   await ensureCalendarIntelligenceSchema();
   return commandDatabase()
-    .prepare(
-      "SELECT * FROM external_event_links WHERE local_event_id = ?",
-    )
+    .prepare("SELECT * FROM external_event_links WHERE local_event_id = ?")
     .bind(localEventId)
     .first<LinkRow>();
 }

@@ -25,6 +25,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { NexusEmblem } from "../brand/NexusEmblem";
 import { AppShell } from "../shell/AppShell";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -457,6 +458,7 @@ export function CommandCenter({
                 onMove={(item, direction) => void movePriority(item, direction)}
                 onRetry={() => void load(false)}
               />
+              <CommandAwareness data={data} now={now} />
               <TimelinePanel
                 data={data}
                 now={now}
@@ -552,11 +554,9 @@ function BriefingPanel({ data }: { data: CommandData }) {
       className="briefing"
       aria-labelledby="briefing-title"
     >
-      <div className="briefing__mark" aria-hidden="true">
-        <Sparkles />
-      </div>
+      <NexusEmblem className="briefing__emblem" />
       <div className="briefing__body">
-        <p className="eyebrow">{data.briefing.data.eyebrow}</p>
+        <p className="eyebrow">Atlas briefing</p>
         <h2 id="briefing-title">{data.briefing.data.summary}</h2>
         <p className="briefing__next">{data.briefing.data.nextStep}</p>
         <div className="briefing__facts">
@@ -573,6 +573,81 @@ function BriefingPanel({ data }: { data: CommandData }) {
         <ChevronRight aria-hidden="true" />
       </Link>
     </Panel>
+  );
+}
+
+function relativeTime(milliseconds: number) {
+  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
+}
+
+function CommandAwareness({ data, now }: { data: CommandData; now: Date }) {
+  const scheduled = data.timeline.data
+    .filter(
+      (item) =>
+        item.status === "scheduled" && item.kind !== "all-day" && item.startAt,
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(left.startAt ?? "") - Date.parse(right.startAt ?? ""),
+    );
+  const current = scheduled.find(
+    (item) =>
+      Date.parse(item.startAt ?? "") <= now.getTime() &&
+      (!item.endAt || Date.parse(item.endAt) >= now.getTime()),
+  );
+  const next = scheduled.find(
+    (item) => Date.parse(item.startAt ?? "") > now.getTime(),
+  );
+  const following = next
+    ? scheduled.find(
+        (item) =>
+          Date.parse(item.startAt ?? "") > Date.parse(next.startAt ?? ""),
+      )
+    : undefined;
+  const untilNext = next?.startAt
+    ? Date.parse(next.startAt) - now.getTime()
+    : null;
+
+  return (
+    <section className="command-awareness" aria-label="Time awareness">
+      <div className="command-awareness__now">
+        <span>Now</span>
+        <strong>{formatTime(now.toISOString())}</strong>
+        <small>
+          {current ? `In progress: ${current.title}` : "Open focus block"}
+        </small>
+      </div>
+      <div>
+        <span>Next</span>
+        <strong>{next ? `Next: ${next.title}` : "No timed item ahead"}</strong>
+        <small>
+          {next
+            ? `${formatTime(next.startAt)} · in ${relativeTime(untilNext ?? 0)}`
+            : "The rest of the day is currently open."}
+        </small>
+      </div>
+      <div>
+        <span>{following ? "Following" : "Available window"}</span>
+        <strong>
+          {following
+            ? `Later: ${following.title}`
+            : untilNext && untilNext > 0
+              ? `${relativeTime(untilNext)} before next`
+              : next
+                ? "Transition now"
+                : "Unscheduled"}
+        </strong>
+        <small>
+          {following
+            ? `${formatTime(following.startAt)} · keep it in view`
+            : "Protect the next useful block."}
+        </small>
+      </div>
+    </section>
   );
 }
 
@@ -602,9 +677,9 @@ function PriorityPanel({
   );
 
   return (
-    <Panel aria-labelledby="priorities-title">
+    <Panel className="command-priorities" aria-labelledby="priorities-title">
       <SectionHeader
-        eyebrow="Focus"
+        eyebrow="Today mission"
         title="Top priorities"
         action={
           <Button
@@ -743,7 +818,7 @@ function TimelinePanel({
   );
 
   return (
-    <Panel aria-labelledby="timeline-title">
+    <Panel className="command-timeline" aria-labelledby="timeline-title">
       <SectionHeader
         eyebrow="Today"
         title="Timeline"

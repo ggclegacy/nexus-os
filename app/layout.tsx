@@ -29,10 +29,10 @@ export const metadata: Metadata = {
       "A private personal command and calendar system for running today with clarity.",
     images: [
       {
-        url: "/nexus-calendar-social.png",
-        width: 1672,
-        height: 941,
-        alt: "Abstract Nexus OS calendar timeline",
+        url: "/nexus-command-calendar-social.png",
+        width: 1200,
+        height: 630,
+        alt: "Nexus OS Command and Calendar timeline",
       },
     ],
   },
@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     title: "Nexus OS",
     description:
       "A private personal command and calendar system for running today with clarity.",
-    images: ["/nexus-calendar-social.png"],
+    images: ["/nexus-command-calendar-social.png"],
   },
 };
 

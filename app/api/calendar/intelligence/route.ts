@@ -1,6 +1,4 @@
-import {
-  updateCalendarPrivacySettings,
-} from "../../../../db/calendar-intelligence-repository";
+import { updateCalendarPrivacySettings } from "../../../../db/calendar-intelligence-repository";
 import { ValidationError } from "../../../../lib/domain/validation";
 import { calendarIntelligencePayload } from "../../../../lib/server/calendar-intelligence-service";
 import { jsonError, readJson } from "../../../../lib/server/http";
@@ -29,7 +27,9 @@ export async function PATCH(request: Request) {
         throw new ValidationError(`${key} must be true or false.`);
       }
     }
-    if (!["remove", "snapshot"].includes(String(body.disconnectedDataRetention))) {
+    if (
+      !["remove", "snapshot"].includes(String(body.disconnectedDataRetention))
+    ) {
       throw new ValidationError("Disconnected data retention is invalid.");
     }
     const privacy = await updateCalendarPrivacySettings({
@@ -38,8 +38,7 @@ export async function PATCH(request: Request) {
       semanticSearch: body.semanticSearch as boolean,
       immediateCreateWithUndo: body.immediateCreateWithUndo as boolean,
       disconnectedDataRetention: body.disconnectedDataRetention as
-        | "remove"
-        | "snapshot",
+        "remove" | "snapshot",
     });
     return Response.json({ privacy });
   } catch (error) {

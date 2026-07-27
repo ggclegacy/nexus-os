@@ -117,23 +117,27 @@ export async function GET(request: Request) {
         event.source === "local" ||
         (event.sourceId !== null && visibleSources.has(event.sourceId)),
     );
-    payload.sourceLabel = sources.some(
+    const hasProviderSnapshot = sources.some(
       (source) => source.provider !== "nexus" && source.visible,
-    )
+    );
+    const hasConnectedProvider = sources.some(
+      (source) =>
+        source.provider !== "nexus" &&
+        source.visible &&
+        source.syncStatus !== "disconnected",
+    );
+    payload.sourceLabel = hasConnectedProvider
       ? "Nexus + connected calendars"
-      : "Private local workspace";
-    payload.syncAvailable = sources.some(
-      (source) => source.provider !== "nexus" && source.visible,
-    );
-    return Response.json(
-      payload,
-      {
-        headers: {
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
+      : hasProviderSnapshot
+        ? "Nexus + local provider snapshot"
+        : "Private local workspace";
+    payload.syncAvailable = hasConnectedProvider;
+    return Response.json(payload, {
+      headers: {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       },
-    );
+    });
   } catch (error) {
     return jsonError(error);
   }

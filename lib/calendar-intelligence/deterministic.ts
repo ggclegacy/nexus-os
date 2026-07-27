@@ -83,11 +83,7 @@ function addMinutes(time: string, minutes: number) {
   };
 }
 
-function baseEvent(
-  date: string,
-  timeZone: string,
-  durationMinutes: number,
-): CalendarEventInput {
+function baseEvent(date: string, timeZone: string): CalendarEventInput {
   return {
     title: "",
     eventType: "personal",
@@ -118,6 +114,9 @@ function baseEvent(
     paidAt: null,
     escalationEnabled: true,
     sensitive: false,
+    organizer: "",
+    attendees: [],
+    preparationChecklist: [],
   };
 }
 
@@ -130,13 +129,14 @@ function parseDate(
   const lower = input.toLowerCase();
   if (/\btoday\b/.test(lower)) return today;
   if (/\btomorrow\b/.test(lower)) return addDays(today, 1);
+  const isoDate = input.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (isoDate) return isoDate[1];
 
   for (let index = 0; index < WEEKDAYS.length; index += 1) {
     const weekday = WEEKDAYS[index];
     if (!new RegExp(`\\b${weekday}\\b`, "i").test(input)) continue;
-    const isNext = new RegExp(`\\bnext\\s+${weekday}\\b`, "i").test(input);
     let offset = (index - dateDay(today) + 7) % 7;
-    if (isNext || offset === 0) offset += 7;
+    if (offset === 0) offset += 7;
     assumptions.push(
       `${weekday[0].toUpperCase()}${weekday.slice(1)} means ${addDays(
         today,
@@ -148,7 +148,10 @@ function parseDate(
 
   for (let monthIndex = 0; monthIndex < MONTHS.length; monthIndex += 1) {
     const match = input.match(
-      new RegExp(`\\b${MONTHS[monthIndex]}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`, "i"),
+      new RegExp(
+        `\\b${MONTHS[monthIndex]}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`,
+        "i",
+      ),
     );
     if (!match) continue;
     const [year] = dateParts(today);
@@ -165,7 +168,11 @@ function parseDate(
     let result = dateKey(year, month, Number(monthly[1]));
     if (result < today) {
       const nextMonth = month === 12 ? 1 : month + 1;
-      result = dateKey(month === 12 ? year + 1 : year, nextMonth, Number(monthly[1]));
+      result = dateKey(
+        month === 12 ? year + 1 : year,
+        nextMonth,
+        Number(monthly[1]),
+      );
     }
     return result;
   }
@@ -210,11 +217,7 @@ export function deterministicCapture(
   const inferredFields: string[] = [];
   const today = localDateInZone(now, preferences.timeZone);
   const localDate = parseDate(request, today, assumptions, ambiguities);
-  const event = baseEvent(
-    localDate,
-    preferences.timeZone,
-    preferences.defaultEventDurationMinutes,
-  );
+  const event = baseEvent(localDate, preferences.timeZone);
   const lower = request.toLowerCase();
 
   event.title = cleanTitle(request);
@@ -396,6 +399,9 @@ function eventInput(event: CalendarEvent): CalendarEventInput {
     paidAt: event.paidAt,
     escalationEnabled: event.escalationEnabled,
     sensitive: event.sensitive,
+    organizer: event.organizer,
+    attendees: event.attendees,
+    preparationChecklist: event.preparationChecklist,
   };
 }
 

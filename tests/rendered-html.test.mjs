@@ -112,5 +112,5 @@ test("server-renders the personal Calendar workspace", async () => {
   assert.match(html, /<title>Calendar \| Nexus OS<\/title>/i);
   assert.match(html, /Personal time/);
   assert.match(html, /Loading personal time/);
-  assert.match(html, /External sync not connected/);
+  assert.match(html, /Local calendar/);
 });

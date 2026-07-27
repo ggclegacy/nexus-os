@@ -260,6 +260,9 @@ function eventInputFromRow(row: TimelineRow): CalendarEventInput {
       | "paidAt"
       | "escalationEnabled"
       | "sensitive"
+      | "organizer"
+      | "attendees"
+      | "preparationChecklist"
     >
   >(row.event_metadata, {
     eventType: "personal",
@@ -280,6 +283,9 @@ function eventInputFromRow(row: TimelineRow): CalendarEventInput {
     paidAt: null,
     escalationEnabled: true,
     sensitive: false,
+    organizer: "",
+    attendees: [],
+    preparationChecklist: [],
   });
   return {
     title: row.title,
@@ -837,6 +843,9 @@ function eventMetadata(input: CalendarEventInput) {
     paidAt: input.paidAt ?? null,
     escalationEnabled: input.escalationEnabled ?? true,
     sensitive: input.sensitive ?? false,
+    organizer: input.organizer ?? "",
+    attendees: input.attendees ?? [],
+    preparationChecklist: input.preparationChecklist ?? [],
   });
 }
 

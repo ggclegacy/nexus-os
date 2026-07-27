@@ -16,11 +16,16 @@ export async function POST(request: Request) {
       durationMinutes < 15 ||
       durationMinutes > 480
     ) {
-      throw new ValidationError("Duration must be between 15 minutes and 8 hours.");
+      throw new ValidationError(
+        "Duration must be between 15 minutes and 8 hours.",
+      );
     }
     const startDate = parseDateKey(body.startDate, "Start date");
     const endDate = parseDateKey(body.endDate, "End date");
-    if (daysBetween(startDate, endDate) < 0 || daysBetween(startDate, endDate) > 31) {
+    if (
+      daysBetween(startDate, endDate) < 0 ||
+      daysBetween(startDate, endDate) > 31
+    ) {
       throw new ValidationError("Availability range must be 31 days or fewer.");
     }
     if (

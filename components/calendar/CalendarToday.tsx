@@ -157,7 +157,7 @@ export function CalendarToday({
             <SectionHeader
               eyebrow="Today mission"
               title="Keep the day in working memory"
-              detail="Only the commitments most likely to matter next."
+              detail="Top priorities, time-sensitive commitments, and the next useful action."
             />
             {mission.length ? (
               <div className="today-mission__items">
@@ -483,7 +483,7 @@ function TodayEventCard({
       tabIndex={-1}
       className={`today-event ${past ? "is-past" : ""} ${
         current ? "is-current" : ""
-      } ${isNext ? "is-next" : ""} today-event--${event.priority}`}
+      } ${isNext ? "is-next" : ""} today-event--${event.priority} today-event--type-${event.eventType}`}
     >
       <button className="today-event__main" onClick={onOpen}>
         <span className="today-event__time">

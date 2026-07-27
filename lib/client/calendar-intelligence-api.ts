@@ -20,7 +20,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   });
   const payload = (await response.json()) as T & { error?: string };
   if (!response.ok) {
-    throw new Error(payload.error ?? "The Calendar request could not be completed.");
+    throw new Error(
+      payload.error ?? "The Calendar request could not be completed.",
+    );
   }
   return payload;
 }
@@ -30,9 +32,7 @@ export const calendarIntelligenceApi = {
     return request<CalendarIntelligencePayload>("/api/calendar/intelligence");
   },
 
-  async updatePrivacy(
-    privacy: Omit<CalendarPrivacySettings, "updatedAt">,
-  ) {
+  async updatePrivacy(privacy: Omit<CalendarPrivacySettings, "updatedAt">) {
     const result = await request<{ privacy: CalendarPrivacySettings }>(
       "/api/calendar/intelligence",
       { method: "PATCH", body: JSON.stringify(privacy) },
@@ -45,10 +45,7 @@ export const calendarIntelligenceApi = {
     update: Partial<
       Pick<
         CalendarSource,
-        | "visible"
-        | "includeInAvailability"
-        | "includeInAtlas"
-        | "isDefault"
+        "visible" | "includeInAvailability" | "includeInAtlas" | "isDefault"
       >
     >,
   ) {
@@ -160,20 +157,17 @@ export const calendarIntelligenceApi = {
     resolution: "nexus" | "provider" | "merged",
     event?: unknown,
   ) {
-    return request(
-      `/api/calendar/conflicts/${encodeURIComponent(id)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ resolution, event }),
-      },
-    );
+    return request(`/api/calendar/conflicts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ resolution, event }),
+    });
   },
 
   updateInsight(id: string, action: "dismiss" | "mute") {
-    return request(
-      `/api/calendar/insights/${encodeURIComponent(id)}`,
-      { method: "PATCH", body: JSON.stringify({ action }) },
-    );
+    return request(`/api/calendar/insights/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ action }),
+    });
   },
 
   undoAudit(id: string) {

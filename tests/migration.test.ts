@@ -63,3 +63,32 @@ describe("Calendar Phase 2 reminder migration safety", () => {
     );
   });
 });
+
+describe("Calendar Phase 3 intelligence migration safety", () => {
+  const sql = readFileSync(
+    resolve(process.cwd(), "drizzle/0004_mute_mysterio.sql"),
+    "utf8",
+  );
+
+  it("adds provider, privacy, proposal, conflict, and audit records", () => {
+    for (const table of [
+      "calendar_connections",
+      "calendar_sources",
+      "external_event_links",
+      "calendar_sync_conflicts",
+      "calendar_privacy_settings",
+      "calendar_proposals",
+      "calendar_audit",
+      "calendar_insight_preferences",
+    ]) {
+      expect(sql).toContain(`CREATE TABLE \`${table}\``);
+    }
+  });
+
+  it("is additive and preserves every canonical personal-time table", () => {
+    expect(sql).not.toMatch(/DROP TABLE|DELETE FROM/);
+    expect(sql).not.toMatch(
+      /ALTER TABLE `(?:timeline_items|priorities|routines|reminders)`/,
+    );
+  });
+});

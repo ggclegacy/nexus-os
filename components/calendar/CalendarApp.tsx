@@ -23,6 +23,7 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  Eye,
   Filter,
   List,
   Pause,
@@ -289,6 +290,33 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
     },
     [],
   );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const googleStatus = params.get("google");
+      if (!["connected", "denied", "failed"].includes(googleStatus ?? "")) {
+        return;
+      }
+      notify(
+        googleStatus === "connected"
+          ? "Google Calendar connected. Review source access and run Sync now."
+          : googleStatus === "denied"
+            ? "Google Calendar connection was cancelled. No access was granted."
+            : "Google Calendar could not be connected. Your local Calendar is unchanged.",
+      );
+      if (googleStatus === "connected") setEditor({ type: "intelligence" });
+      params.delete("google");
+      params.delete("integration");
+      const query = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        query ? `/calendar?${query}` : "/calendar",
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [notify]);
 
   const load = useCallback(
     async (initial = false, signal?: AbortSignal) => {
@@ -871,7 +899,12 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
               <AgendaView
                 data={data}
                 cursor={cursor}
-                onEditEvent={(item) => setEditor({ type: "event", item })}
+                onEditEvent={(item) =>
+                  setEditor({
+                    type: item.readOnly ? "event-detail" : "event",
+                    item,
+                  })
+                }
                 onDeleteEvent={requestDeleteEvent}
                 onStatus={(item, status) => void changeEvent(item, { status })}
                 onPayment={(item, paymentStatus) =>
@@ -914,7 +947,12 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
                 start={range.start}
                 end={range.end}
                 onSelectDay={(date) => navigateTo("day", date)}
-                onEditEvent={(item) => setEditor({ type: "event", item })}
+                onEditEvent={(item) =>
+                  setEditor({
+                    type: item.readOnly ? "event-detail" : "event",
+                    item,
+                  })
+                }
                 onOccurrence={safelyChangeOccurrence}
                 onAdd={(date) =>
                   setEditor({ type: "event", defaultDate: date })
@@ -947,7 +985,12 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
                       paymentStatus === "paid" ? "completed" : "scheduled",
                   })
                 }
-                onReschedule={(item) => setEditor({ type: "event", item })}
+                onReschedule={(item) =>
+                  setEditor({
+                    type: item.readOnly ? "event-detail" : "event",
+                    item,
+                  })
+                }
                 onReminder={(item, action, snoozedUntil) =>
                   void changeReminder(item, action, snoozedUntil)
                 }
@@ -957,7 +1000,12 @@ export function CalendarApp({ api = timeApi }: { api?: TimeApi }) {
               <BirthdayPlanner
                 data={data}
                 date={cursor}
-                onOpen={(item) => setEditor({ type: "event", item })}
+                onOpen={(item) =>
+                  setEditor({
+                    type: item.readOnly ? "event-detail" : "event",
+                    item,
+                  })
+                }
                 onAdd={(date) =>
                   setEditor({
                     type: "event",
@@ -1685,12 +1733,15 @@ function EventCard({
     <article
       className={`calendar-event calendar-event--${event.status} ${
         event.conflictState !== "none" ? "calendar-event--conflict" : ""
-      }`}
+      } calendar-event--type-${event.eventType}`}
     >
       <span className="calendar-event__marker" aria-hidden="true" />
       <div>
         <div className="calendar-event__title">
           <strong>{event.title}</strong>
+          <span className="calendar-event__type">
+            {eventTypeLabel(event.eventType)}
+          </span>
           {event.recurrence ? (
             <span title={recurrenceLabel(event.recurrence)}>
               <Repeat2 aria-hidden="true" /> Recurring
@@ -1719,29 +1770,38 @@ function EventCard({
         ) : null}
       </div>
       <div className="item-actions">
-        {event.eventType === "financial" &&
+        {!event.readOnly &&
+        event.eventType === "financial" &&
         event.paymentStatus !== "paid" &&
         onPayment ? (
           <Button variant="tertiary" onClick={() => onPayment("paid")}>
             Mark paid
           </Button>
-        ) : event.status === "scheduled" && onStatus ? (
+        ) : !event.readOnly && event.status === "scheduled" && onStatus ? (
           <Button variant="tertiary" onClick={() => onStatus("completed")}>
             Complete
           </Button>
         ) : null}
         <Button
           variant="icon"
-          aria-label={`Edit ${event.title}`}
-          icon={<Pencil aria-hidden="true" />}
+          aria-label={`${event.readOnly ? "View" : "Edit"} ${event.title}`}
+          icon={
+            event.readOnly ? (
+              <Eye aria-hidden="true" />
+            ) : (
+              <Pencil aria-hidden="true" />
+            )
+          }
           onClick={onEdit}
         />
-        <Button
-          variant="icon"
-          aria-label={`Remove ${event.title}`}
-          icon={<Trash2 aria-hidden="true" />}
-          onClick={onDelete}
-        />
+        {!event.readOnly ? (
+          <Button
+            variant="icon"
+            aria-label={`Remove ${event.title}`}
+            icon={<Trash2 aria-hidden="true" />}
+            onClick={onDelete}
+          />
+        ) : null}
       </div>
     </article>
   );
@@ -1878,7 +1938,9 @@ function WeekView({
                 {events.map((event) => (
                   <button
                     key={event.occurrenceKey}
-                    className={`week-event ${event.allDay ? "is-all-day" : ""}`}
+                    className={`week-event week-event--type-${event.eventType} ${
+                      event.allDay ? "is-all-day" : ""
+                    }`}
                     onClick={() => onEditEvent(event)}
                   >
                     <span>
@@ -1887,6 +1949,7 @@ function WeekView({
                         : formatTime(event.startAt, data.preferences.hourCycle)}
                     </span>
                     <strong>{event.title}</strong>
+                    <span>{eventTypeLabel(event.eventType)}</span>
                     {event.recurrence ? (
                       <span>
                         <Repeat2 aria-hidden="true" /> Recurring
@@ -2430,6 +2493,9 @@ function EventEditor({
     item?.escalationEnabled ?? false,
   );
   const [sensitive, setSensitive] = useState(item?.sensitive ?? false);
+  const [preparation, setPreparation] = useState(
+    item?.preparationChecklist?.join("\n") ?? "",
+  );
   const [priority, setPriority] = useState<CalendarEvent["priority"]>(
     item?.priority ?? "standard",
   );
@@ -2564,6 +2630,12 @@ function EventEditor({
           : null,
       escalationEnabled,
       sensitive,
+      organizer: item?.organizer ?? "",
+      attendees: item?.attendees ?? [],
+      preparationChecklist: preparation
+        .split("\n")
+        .map((value) => value.trim())
+        .filter(Boolean),
       priority,
       status,
       allDay,
@@ -2856,6 +2928,16 @@ function EventEditor({
                 onChange={(event) => setNotes(event.target.value)}
               />
             </label>
+            <label>
+              <span>Preparation checklist (one item per line)</span>
+              <textarea
+                value={preparation}
+                maxLength={4_800}
+                rows={4}
+                placeholder={"Bring insurance card\nPrepare questions"}
+                onChange={(event) => setPreparation(event.target.value)}
+              />
+            </label>
             <div className="form-row">
               <label>
                 <span>Priority</span>
@@ -3143,27 +3225,33 @@ function EventDetailDialog({
       footer={
         item ? (
           <>
-            <Button
-              variant="tertiary"
-              icon={<Trash2 aria-hidden="true" />}
-              onClick={() => onDelete(item)}
-            >
-              Delete
-            </Button>
-            <Button
-              variant="tertiary"
-              icon={<CalendarClock aria-hidden="true" />}
-              onClick={() => onReschedule(item)}
-            >
-              Reschedule
-            </Button>
-            <Button
-              variant="primary"
-              icon={<Pencil aria-hidden="true" />}
-              onClick={() => onEdit(item)}
-            >
-              Edit
-            </Button>
+            {item.readOnly ? (
+              <Badge tone="neutral">Read-only provider event</Badge>
+            ) : (
+              <>
+                <Button
+                  variant="tertiary"
+                  icon={<Trash2 aria-hidden="true" />}
+                  onClick={() => onDelete(item)}
+                >
+                  Delete
+                </Button>
+                <Button
+                  variant="tertiary"
+                  icon={<CalendarClock aria-hidden="true" />}
+                  onClick={() => onReschedule(item)}
+                >
+                  Reschedule
+                </Button>
+                <Button
+                  variant="primary"
+                  icon={<Pencil aria-hidden="true" />}
+                  onClick={() => onEdit(item)}
+                >
+                  Edit
+                </Button>
+              </>
+            )}
           </>
         ) : null
       }
@@ -3215,6 +3303,32 @@ function EventDetailDialog({
                 <dd>{item.provider}</dd>
               </div>
             ) : null}
+            <div>
+              <dt>Source</dt>
+              <dd>
+                {item.source === "imported"
+                  ? item.provider || "Connected calendar"
+                  : "Nexus Calendar"}
+                {item.readOnly ? " · Read only" : ""}
+              </dd>
+            </div>
+            {item.organizer ? (
+              <div>
+                <dt>Organizer</dt>
+                <dd>{item.organizer}</dd>
+              </div>
+            ) : null}
+            {item.attendees?.find((attendee) => attendee.self) ? (
+              <div>
+                <dt>Your response</dt>
+                <dd>
+                  {
+                    item.attendees.find((attendee) => attendee.self)!
+                      .responseStatus
+                  }
+                </dd>
+              </div>
+            ) : null}
             {item.amount !== null ? (
               <div>
                 <dt>Amount</dt>
@@ -3248,13 +3362,40 @@ function EventDetailDialog({
             ) : null}
           </dl>
           {item.notes ? <p>{item.notes}</p> : null}
+          {item.attendees?.length ? (
+            <details>
+              <summary>Attendees ({item.attendees.length})</summary>
+              <ul>
+                {item.attendees.map((attendee, index) => (
+                  <li key={`${attendee.email}-${index}`}>
+                    {attendee.displayName || attendee.email || "Attendee"}
+                    {attendee.responseStatus
+                      ? ` · ${attendee.responseStatus}`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          {item.preparationChecklist?.length ? (
+            <section aria-labelledby={`preparation-${item.id}`}>
+              <h3 id={`preparation-${item.id}`}>Preparation</h3>
+              <ul>
+                {item.preparationChecklist.map((preparationItem) => (
+                  <li key={preparationItem}>{preparationItem}</li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {item.meetingUrl ? (
             <a href={item.meetingUrl} target="_blank" rel="noreferrer">
               Open meeting link
             </a>
           ) : null}
           <div className="event-detail__actions">
-            {item.eventType === "financial" && item.paymentStatus ? (
+            {!item.readOnly &&
+            item.eventType === "financial" &&
+            item.paymentStatus ? (
               <Button
                 variant="tertiary"
                 onClick={() =>
@@ -3267,7 +3408,7 @@ function EventDetailDialog({
                 {item.paymentStatus === "paid" ? "Mark unpaid" : "Mark paid"}
               </Button>
             ) : null}
-            {actionable && item.status === "scheduled" ? (
+            {!item.readOnly && actionable && item.status === "scheduled" ? (
               <Button
                 variant="tertiary"
                 icon={<Check aria-hidden="true" />}

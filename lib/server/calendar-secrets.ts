@@ -43,22 +43,53 @@ function encryptionKeyBytes() {
 }
 
 export function googleCalendarConfiguration() {
-  const missing = [
+  const required = [
     ["GOOGLE_CALENDAR_CLIENT_ID", process.env.GOOGLE_CALENDAR_CLIENT_ID],
-    ["GOOGLE_CALENDAR_CLIENT_SECRET", process.env.GOOGLE_CALENDAR_CLIENT_SECRET],
+    [
+      "GOOGLE_CALENDAR_CLIENT_SECRET",
+      process.env.GOOGLE_CALENDAR_CLIENT_SECRET,
+    ],
     ["NEXUS_OAUTH_STATE_SECRET", process.env.NEXUS_OAUTH_STATE_SECRET],
     [
       "NEXUS_CREDENTIAL_ENCRYPTION_KEY",
       process.env.NEXUS_CREDENTIAL_ENCRYPTION_KEY,
     ],
-  ]
-    .filter(([, value]) => !value)
-    .map(([name]) => name);
+  ] as const;
+  const missing = required.filter(([, value]) => !value).map(([name]) => name);
+  const invalid: string[] = [];
+  if (
+    process.env.NEXUS_OAUTH_STATE_SECRET &&
+    process.env.NEXUS_OAUTH_STATE_SECRET.length < 32
+  ) {
+    invalid.push(
+      "NEXUS_OAUTH_STATE_SECRET must contain at least 32 characters",
+    );
+  }
+  if (process.env.NEXUS_CREDENTIAL_ENCRYPTION_KEY) {
+    try {
+      if (
+        base64ToBytes(process.env.NEXUS_CREDENTIAL_ENCRYPTION_KEY)
+          .byteLength !== 32
+      ) {
+        invalid.push(
+          "NEXUS_CREDENTIAL_ENCRYPTION_KEY must decode to exactly 32 bytes",
+        );
+      }
+    } catch {
+      invalid.push(
+        "NEXUS_CREDENTIAL_ENCRYPTION_KEY must be valid base64 for exactly 32 bytes",
+      );
+    }
+  }
+  const errors = [
+    ...(missing.length
+      ? [`Missing server configuration: ${missing.join(", ")}`]
+      : []),
+    ...invalid,
+  ];
   return {
-    configured: missing.length === 0,
-    reasonUnavailable: missing.length
-      ? `Missing server configuration: ${missing.join(", ")}.`
-      : null,
+    configured: errors.length === 0,
+    reasonUnavailable: errors.length ? `${errors.join(". ")}.` : null,
     clientId: process.env.GOOGLE_CALENDAR_CLIENT_ID ?? "",
     clientSecret: process.env.GOOGLE_CALENDAR_CLIENT_SECRET ?? "",
   };
@@ -143,9 +174,7 @@ export async function verifyOAuthState(value: string) {
     encoder.encode(payload),
   );
   if (!valid) throw new Error("OAuth state could not be verified.");
-  const decoded = JSON.parse(
-    decoder.decode(base64UrlDecode(payload)),
-  ) as {
+  const decoded = JSON.parse(decoder.decode(base64UrlDecode(payload))) as {
     nonce: string;
     returnTo: string;
     expiresAt: number;

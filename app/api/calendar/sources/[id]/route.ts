@@ -25,7 +25,10 @@ export async function PATCH(request: Request, context: Context) {
     }
     const source = await updateCalendarSource(id, update);
     if (!source) {
-      return Response.json({ error: "Calendar source not found." }, { status: 404 });
+      return Response.json(
+        { error: "Calendar source not found." },
+        { status: 404 },
+      );
     }
     return Response.json({ source });
   } catch (error) {

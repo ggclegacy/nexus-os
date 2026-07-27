@@ -251,7 +251,7 @@ export function MonthView({
                       {visible.map((item) => (
                         <button
                           key={item.occurrenceKey}
-                          className={`month-event month-event--${item.priority}`}
+                          className={`month-event month-event--${item.priority} month-event--type-${item.eventType}`}
                           onClick={() => onOpenEvent(item)}
                         >
                           {item.eventType === "birthday" ? (
@@ -405,7 +405,8 @@ export function ReminderCenter({
                         >
                           Open
                         </Button>
-                        {event.eventType === "financial" &&
+                        {!event.readOnly &&
+                        event.eventType === "financial" &&
                         event.paymentStatus !== "paid" ? (
                           <Button
                             variant="tertiary"
@@ -413,7 +414,7 @@ export function ReminderCenter({
                           >
                             Mark paid
                           </Button>
-                        ) : event.status === "scheduled" ? (
+                        ) : !event.readOnly && event.status === "scheduled" ? (
                           <Button
                             variant="tertiary"
                             icon={<Check aria-hidden="true" />}
@@ -488,12 +489,14 @@ export function ReminderCenter({
                                 </button>
                               </div>
                             </details>
-                            <Button
-                              variant="tertiary"
-                              onClick={() => onReschedule(event)}
-                            >
-                              Reschedule
-                            </Button>
+                            {!event.readOnly ? (
+                              <Button
+                                variant="tertiary"
+                                onClick={() => onReschedule(event)}
+                              >
+                                Reschedule
+                              </Button>
+                            ) : null}
                             <Button
                               variant="tertiary"
                               onClick={() => onReminder(reminder, "dismiss")}
@@ -676,19 +679,21 @@ export function BillPlanner({
                     <Button variant="tertiary" onClick={() => onOpen(bill)}>
                       Open
                     </Button>
-                    <Button
-                      variant="tertiary"
-                      onClick={() =>
-                        onPayment(
-                          bill,
-                          bill.paymentStatus === "paid" ? "unpaid" : "paid",
-                        )
-                      }
-                    >
-                      {bill.paymentStatus === "paid"
-                        ? "Mark unpaid"
-                        : "Mark paid"}
-                    </Button>
+                    {!bill.readOnly ? (
+                      <Button
+                        variant="tertiary"
+                        onClick={() =>
+                          onPayment(
+                            bill,
+                            bill.paymentStatus === "paid" ? "unpaid" : "paid",
+                          )
+                        }
+                      >
+                        {bill.paymentStatus === "paid"
+                          ? "Mark unpaid"
+                          : "Mark paid"}
+                      </Button>
+                    ) : null}
                   </div>
                 </article>
               ))}
@@ -772,18 +777,22 @@ export function CalendarBriefDialog({
                   <button onClick={() => onOpen(event)}>
                     {briefEventTitle(event)}
                   </button>
-                  <Button
-                    variant="tertiary"
-                    onClick={() => onStatus(event, "completed")}
-                  >
-                    Complete
-                  </Button>
-                  <Button
-                    variant="tertiary"
-                    onClick={() => onStatus(event, "dismissed")}
-                  >
-                    Dismiss
-                  </Button>
+                  {!event.readOnly ? (
+                    <>
+                      <Button
+                        variant="tertiary"
+                        onClick={() => onStatus(event, "completed")}
+                      >
+                        Complete
+                      </Button>
+                      <Button
+                        variant="tertiary"
+                        onClick={() => onStatus(event, "dismissed")}
+                      >
+                        Dismiss
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               ))}
             </section>

@@ -1,6 +1,7 @@
 import {
   deleteCalendarEvent,
   findEventConflicts,
+  getCanonicalCalendarEvent,
   updateCalendarEvent,
 } from "../../../../db/time-repository";
 import {
@@ -21,6 +22,13 @@ interface Context {
 export async function PATCH(request: Request, context: Context) {
   try {
     const { id } = await context.params;
+    const current = await getCanonicalCalendarEvent(id);
+    if (current?.readOnly) {
+      return Response.json(
+        { error: "This connected calendar is read-only." },
+        { status: 403 },
+      );
+    }
     const body = (await readJson(request)) as {
       event?: unknown;
       occurrenceDate?: unknown;
@@ -77,6 +85,13 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
+    const current = await getCanonicalCalendarEvent(id);
+    if (current?.readOnly) {
+      return Response.json(
+        { error: "This connected calendar is read-only." },
+        { status: 403 },
+      );
+    }
     const body = (await readJson(request)) as {
       occurrenceDate?: unknown;
       scope?: unknown;

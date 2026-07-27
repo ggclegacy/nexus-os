@@ -1,5 +1,6 @@
 import {
   getCalendarAuditDetail,
+  markCalendarAuditUndone,
   recordCalendarAudit,
 } from "../../../../../../db/calendar-intelligence-repository";
 import {
@@ -28,22 +29,24 @@ export async function POST(_request: Request, context: Context) {
       for (let index = 0; index < detail.entry.eventIds.length; index += 1) {
         const eventId = detail.entry.eventIds[index];
         const input = detail.after[index];
-        try {
-          await deleteGoogleCalendarEvent(eventId);
-        } catch {
-          // Local-only events do not have provider links.
-        }
+        await deleteGoogleCalendarEvent(eventId);
         await deleteCalendarEvent(eventId, input.localDate, "series");
       }
     } else if (detail.entry.action === "proposal-move") {
       for (let index = 0; index < detail.entry.eventIds.length; index += 1) {
         const eventId = detail.entry.eventIds[index];
         const input = detail.before[index];
-        await updateCalendarEvent(eventId, input.localDate, "occurrence", input);
+        await updateCalendarEvent(
+          eventId,
+          input.localDate,
+          "occurrence",
+          input,
+        );
       }
     } else {
       throw new ValidationError("This audit action does not support undo.");
     }
+    await markCalendarAuditUndone(id);
     await recordCalendarAudit({
       actor: "owner",
       action: "undo",

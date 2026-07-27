@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Undo2,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   calendarIntelligenceApi,
@@ -44,12 +45,22 @@ function formatDateTime(value: string | null) {
 }
 
 function sourceName(data: CalendarIntelligencePayload, id: string | null) {
-  return data.sources.find((source) => source.id === id)?.displayName ?? "Nexus Calendar";
+  return (
+    data.sources.find((source) => source.id === id)?.displayName ??
+    "Nexus Calendar"
+  );
 }
 
 function operationEvent(operation: CalendarOperation) {
   return operation.type === "create-event" ? operation.event : operation.after;
 }
+
+const IMMEDIATE_EVENT_TYPES = new Set([
+  "personal",
+  "meeting",
+  "workout",
+  "reminder",
+]);
 
 export function CalendarIntelligenceDialog({
   open,
@@ -107,15 +118,14 @@ export function CalendarIntelligenceDialog({
 
   useEffect(() => {
     if (!open) return;
-    const timer = window.setTimeout(() => void reload(), 0);
+    const timer = window.setTimeout(() => {
+      setAvailabilityEnd(addDays(date, 7));
+      void reload();
+    }, 0);
     return () => window.clearTimeout(timer);
     // api is an injectable test boundary with stable production identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-
-  useEffect(() => {
-    setAvailabilityEnd(addDays(date, 7));
-  }, [date]);
 
   const run = async (key: string, action: () => Promise<void>) => {
     setBusy(key);
@@ -144,6 +154,31 @@ export function CalendarIntelligenceDialog({
     if (!captureText.trim()) return;
     await run("capture", async () => {
       const result = await api.capture(captureText.trim());
+      const operation = result.proposal.operations[0];
+      const parsedEvent = operation ? operationEvent(operation) : null;
+      const applyImmediately =
+        data?.privacy.immediateCreateWithUndo === true &&
+        result.proposal.operations.length === 1 &&
+        operation?.type === "create-event" &&
+        operation.destinationSourceId === "nexus" &&
+        parsedEvent !== null &&
+        IMMEDIATE_EVENT_TYPES.has(parsedEvent.eventType) &&
+        result.preview.ambiguities.length === 0 &&
+        result.preview.conflicts.length === 0;
+      if (applyImmediately) {
+        const applied = await api.applyProposal(result.proposal.id, [
+          operation.id,
+        ]);
+        setProposal(null);
+        setCaptureMeta(null);
+        setUndoId(applied.auditId);
+        setNotice(
+          "The clear, low-risk Nexus event was created under your saved immediate-create permission.",
+        );
+        await onCalendarChanged();
+        await reload();
+        return;
+      }
       setProposal(result.proposal);
       setSelectedOperations(result.proposal.operations.map((item) => item.id));
       setCaptureMeta({
@@ -316,7 +351,9 @@ export function CalendarIntelligenceDialog({
                 await api.rejectProposal(proposal.id);
                 setProposal(null);
                 setCaptureMeta(null);
-                setNotice("The proposal was discarded. No Calendar data changed.");
+                setNotice(
+                  "The proposal was discarded. No Calendar data changed.",
+                );
               });
             }}
             busy={busy}
@@ -347,6 +384,7 @@ export function CalendarIntelligenceDialog({
           />
         ) : data && tab === "privacy" ? (
           <PrivacyAndInsights
+            key={data.privacy.updatedAt}
             data={data}
             busy={busy}
             run={run}
@@ -491,6 +529,7 @@ function Concierge({
         </form>
         {proposal ? (
           <ProposalReview
+            key={`${proposal.id}:${proposal.summary}`}
             proposal={proposal}
             data={data}
             captureMeta={captureMeta}
@@ -590,10 +629,7 @@ function Concierge({
                 onChange={(event) =>
                   onPeriod(
                     event.target.value as
-                      | "any"
-                      | "morning"
-                      | "afternoon"
-                      | "evening",
+                      "any" | "morning" | "afternoon" | "evening",
                   )
                 }
               >
@@ -621,10 +657,7 @@ function Concierge({
                     </strong>
                     <p>{slot.reason}</p>
                   </div>
-                  <Button
-                    variant="tertiary"
-                    onClick={() => onChooseSlot(slot)}
-                  >
+                  <Button variant="tertiary" onClick={() => onChooseSlot(slot)}>
                     Build event preview
                   </Button>
                 </article>
@@ -687,6 +720,12 @@ function ProposalReview({
 }) {
   const first = proposal.operations[0];
   const initial = first ? operationEvent(first) : null;
+  const includesProviderCreate = proposal.operations.some(
+    (operation) =>
+      operation.type === "create-event" &&
+      operation.destinationSourceId !== null &&
+      operation.destinationSourceId !== "nexus",
+  );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<CalendarEventInput | null>(initial);
   const [destination, setDestination] = useState(
@@ -695,14 +734,6 @@ function ProposalReview({
       : "nexus",
   );
   const [editError, setEditError] = useState("");
-
-  useEffect(() => {
-    const operation = proposal.operations[0];
-    setDraft(operation ? operationEvent(operation) : null);
-    if (operation?.type === "create-event") {
-      setDestination(operation.destinationSourceId ?? "nexus");
-    }
-  }, [proposal]);
 
   const toggle = (id: string) => {
     onSelectedOperations(
@@ -726,7 +757,9 @@ function ProposalReview({
       setEditing(false);
     } catch (error) {
       setEditError(
-        error instanceof Error ? error.message : "The preview could not be saved.",
+        error instanceof Error
+          ? error.message
+          : "The preview could not be saved.",
       );
     }
   };
@@ -778,7 +811,9 @@ function ProposalReview({
                 </strong>
                 <small>
                   {event.localDate}
-                  {event.startTime ? ` · ${event.startTime}–${event.endTime}` : " · All day"}
+                  {event.startTime
+                    ? ` · ${event.startTime}–${event.endTime}`
+                    : " · All day"}
                   {" · "}
                   {operation.type === "create-event"
                     ? sourceName(data, operation.destinationSourceId)
@@ -899,14 +934,28 @@ function ProposalReview({
           </div>
         </div>
       ) : null}
+      {includesProviderCreate ? (
+        <p className="surface-note">
+          Undo for a connected-calendar creation requires that provider to
+          remain available. Nexus will not report undo success or remove the
+          local record if the provider deletion fails.
+        </p>
+      ) : null}
 
       <div className="proposal-review__actions">
         {first ? (
-          <Button variant="tertiary" onClick={() => setEditing((value) => !value)}>
+          <Button
+            variant="tertiary"
+            onClick={() => setEditing((value) => !value)}
+          >
             Edit fields
           </Button>
         ) : null}
-        <Button variant="tertiary" onClick={onReject} loading={busy === "reject"}>
+        <Button
+          variant="tertiary"
+          onClick={onReject}
+          loading={busy === "reject"}
+        >
           Discard
         </Button>
         <Button
@@ -968,17 +1017,17 @@ function ConnectedCalendars({
             <div>
               <strong>Google Calendar</strong>
               <p>
-                Read selected calendars, write only to calendars you choose,
-                and exclude any source from availability or Atlas.
+                Read selected calendars, write only to calendars you choose, and
+                exclude any source from availability or Atlas.
               </p>
               {data.capabilities.google.configured ? (
-                <a
+                <Link
                   className="button button--primary"
                   href="/api/calendar/google/connect"
                 >
                   Connect Google Calendar
                   <ExternalLink aria-hidden="true" />
-                </a>
+                </Link>
               ) : (
                 <div className="provider-not-configured">
                   <Badge tone="neutral">Not configured</Badge>
@@ -999,7 +1048,8 @@ function ConnectedCalendars({
                   <div>
                     <strong>{connection.accountEmail}</strong>
                     <p>
-                      Last confirmed sync · {formatDateTime(connection.lastSyncedAt)}
+                      Last confirmed sync ·{" "}
+                      {formatDateTime(connection.lastSyncedAt)}
                     </p>
                   </div>
                   <Badge
@@ -1023,12 +1073,12 @@ function ConnectedCalendars({
                 <div className="item-actions">
                   {connection.status === "attention" &&
                   data.capabilities.google.configured ? (
-                    <a
+                    <Link
                       className="button button--tertiary"
                       href="/api/calendar/google/connect"
                     >
                       Reconnect
-                    </a>
+                    </Link>
                   ) : null}
                   <Button
                     variant="tertiary"
@@ -1168,7 +1218,9 @@ function ConnectedCalendars({
                       checked={source.isDefault}
                       onChange={() =>
                         void run(`source:${source.id}:default`, async () => {
-                          await api.updateSource(source.id, { isDefault: true });
+                          await api.updateSource(source.id, {
+                            isDefault: true,
+                          });
                           await reload();
                         })
                       }
@@ -1226,12 +1278,10 @@ function ConflictResolver({
   ): Promise<void>;
 }) {
   const [mergeOpen, setMergeOpen] = useState(false);
-  const [merged, setMerged] = useState<CalendarEventInput>(
-    {
-      ...conflict.providerVersion,
-      ...conflict.localVersion,
-    } as CalendarEventInput,
-  );
+  const [merged, setMerged] = useState<CalendarEventInput>({
+    ...conflict.providerVersion,
+    ...conflict.localVersion,
+  } as CalendarEventInput);
   return (
     <article>
       <div>
@@ -1336,14 +1386,15 @@ function PrivacyAndInsights({
   api: CalendarIntelligenceApi;
 }) {
   const [privacy, setPrivacy] = useState(data.privacy);
-  useEffect(() => setPrivacy(data.privacy), [data.privacy]);
   return (
     <div className="intelligence-stack" role="tabpanel">
       <section className="intelligence-card">
         <header>
           <div>
             <p className="eyebrow">Privacy and Intelligence</p>
-            <h3>Control which context can leave deterministic Calendar logic</h3>
+            <h3>
+              Control which context can leave deterministic Calendar logic
+            </h3>
           </div>
         </header>
         <div className="privacy-controls">
@@ -1377,7 +1428,10 @@ function PrivacyAndInsights({
               type="checkbox"
               checked={privacy.patternInsights}
               onChange={(event) =>
-                setPrivacy({ ...privacy, patternInsights: event.target.checked })
+                setPrivacy({
+                  ...privacy,
+                  patternInsights: event.target.checked,
+                })
               }
             />
           </label>
@@ -1400,9 +1454,9 @@ function PrivacyAndInsights({
             <span>
               <strong>Create immediately with undo</strong>
               <small>
-                This permission remains stored, but medical, protocol, payment,
-                cancellation, invitation, and multi-event changes still require
-                review.
+                Only a clear, conflict-free, single Nexus personal, meeting,
+                workout, or reminder can skip preview. Everything else still
+                requires review and every immediate creation has undo.
               </small>
             </span>
             <input
@@ -1429,8 +1483,7 @@ function PrivacyAndInsights({
                 setPrivacy({
                   ...privacy,
                   disconnectedDataRetention: event.target.value as
-                    | "remove"
-                    | "snapshot",
+                    "remove" | "snapshot",
                 })
               }
             >
@@ -1527,6 +1580,7 @@ function AuditHistory({
   onCalendarChanged(): void | Promise<void>;
   api: CalendarIntelligenceApi;
 }) {
+  const [renderedAt] = useState(() => Date.now());
   return (
     <section className="intelligence-card" role="tabpanel">
       <header>
@@ -1540,7 +1594,7 @@ function AuditHistory({
           {data.audit.map((entry) => {
             const undoActive =
               entry.undoAvailable &&
-              Date.parse(entry.createdAt) > Date.now() - 10 * 60_000;
+              Date.parse(entry.createdAt) > renderedAt - 10 * 60_000;
             return (
               <li key={entry.id}>
                 <span className="audit-list__marker" aria-hidden="true" />

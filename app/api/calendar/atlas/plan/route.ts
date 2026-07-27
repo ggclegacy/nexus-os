@@ -41,28 +41,26 @@ export async function POST(request: Request) {
     const id = requestId(request);
     const createdAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
-    const operations = movable
-      .slice(0, slots.length)
-      .map((event, index) => {
-        const before = calendarEventInput(event);
-        const slot = slots[index];
-        return {
-          id: `${id}:move:${index}`,
-          type: "move-event" as const,
-          eventId: event.id,
-          occurrenceDate: event.occurrenceDate,
-          before,
-          after: {
-            ...before,
-            allDay: false,
-            localDate: slot.localDate,
-            endLocalDate: slot.localDate,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-          },
-          reason: `This unresolved flexible item fits an open block with the ${preferences.transitionBufferMinutes}-minute buffer preserved.`,
-        };
-      });
+    const operations = movable.slice(0, slots.length).map((event, index) => {
+      const before = calendarEventInput(event);
+      const slot = slots[index];
+      return {
+        id: `${id}:move:${index}`,
+        type: "move-event" as const,
+        eventId: event.id,
+        occurrenceDate: event.occurrenceDate,
+        before,
+        after: {
+          ...before,
+          allDay: false,
+          localDate: slot.localDate,
+          endLocalDate: slot.localDate,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        },
+        reason: `This unresolved flexible item fits an open block with the ${preferences.transitionBufferMinutes}-minute buffer preserved.`,
+      };
+    });
     const proposal: CalendarProposal = {
       id,
       userRequest: `Plan ${date}`,

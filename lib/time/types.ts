@@ -73,6 +73,14 @@ export interface CalendarEventInput {
   paidAt?: string | null;
   escalationEnabled?: boolean;
   sensitive?: boolean;
+  organizer?: string;
+  attendees?: Array<{
+    displayName: string;
+    email: string;
+    responseStatus: string;
+    self: boolean;
+  }>;
+  preparationChecklist?: string[];
 }
 
 export interface CalendarEvent extends CalendarEventInput {

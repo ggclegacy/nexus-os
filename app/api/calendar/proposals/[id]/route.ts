@@ -51,7 +51,9 @@ export async function POST(request: Request, context: Context) {
       return Response.json({ error: "Proposal not found." }, { status: 404 });
     }
     if (proposal.status !== "draft" && proposal.status !== "approved") {
-      throw new ValidationError("This proposal is no longer available to apply.");
+      throw new ValidationError(
+        "This proposal is no longer available to apply.",
+      );
     }
     if (Date.parse(proposal.expiresAt) <= Date.now()) {
       throw new ValidationError(

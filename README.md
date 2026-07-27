@@ -1,10 +1,11 @@
 # Nexus OS
 
-Nexus OS is a private personal command system. Phases 1 and 2 provide the
+Nexus OS is a private personal command system. Calendar Phases 1–3 provide the
 shared application foundation, responsive Command Center, and a functional
 Today-first personal time system for typed events, priorities, routines,
 advanced recurrence, persistent reminder lifecycles, planning views, briefs,
-Rescue Mode, and quiet hours.
+Rescue Mode, quiet hours, connected Google calendars, and reviewed Calendar
+intelligence.
 
 ## Local development
 
@@ -25,8 +26,8 @@ Open `http://localhost:3000`.
 The development server uses a project-local Cloudflare D1 database. Command
 Center and Calendar read from the same canonical priority, event, and routine
 records under the ignored `.wrangler` directory. This is local development
-persistence, not cloud sync. Calendar states this boundary explicitly; no
-external provider is connected.
+persistence. Provider sync is available only after the optional server
+configuration below and a completed OAuth flow.
 
 To run an existing production build locally:
 
@@ -47,7 +48,8 @@ single-owner access gate is configured.
    supplies `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`.
 3. Add `NEXUS_ACCESS_USERNAME` and a long, unique
    `NEXUS_ACCESS_PASSWORD` to every hosted environment.
-4. Deploy. `vercel.json` selects the verified `npm run build:vercel` build.
+4. Add any optional Calendar integration values described below.
+5. Deploy. `vercel.json` selects the verified `npm run build:vercel` build.
 
 For a manually managed Turso database, add all four environment variables in
 Vercel using `.env.example` as the reference. The application initializes an
@@ -69,6 +71,43 @@ ignored `local.db` file:
 npm run dev:vercel
 npm run test:rendered:vercel
 ```
+
+## Calendar Phase 3 configuration
+
+Phase 3 is capability-gated. Missing credentials do not create placeholder
+connections or simulated AI: Calendar keeps its local views, rule-based briefs,
+structured search, deterministic availability, capture parser, Plan My Day,
+and evidence-backed insights.
+
+For Google Calendar:
+
+1. Enable the Google Calendar API and create a Web application OAuth client.
+2. Register
+   `https://your-domain.example/api/calendar/google/callback` as an authorized
+   redirect URI. For local testing, register the matching localhost URI.
+3. Set `GOOGLE_CALENDAR_CLIENT_ID`,
+   `GOOGLE_CALENDAR_CLIENT_SECRET`, `NEXUS_OAUTH_STATE_SECRET`, and
+   `NEXUS_CREDENTIAL_ENCRYPTION_KEY` from `.env.example`.
+4. Open Calendar → Intelligence → Connected and complete the provider consent
+   flow.
+
+Nexus requests Google account identity, calendar-list read access, and event
+read/write access. Tokens are encrypted before storage. The current deployment
+foundation has no background job runner, so synchronization is incremental and
+user-triggered through Sync now. Nexus never reports a provider change as
+synced before Google confirms it.
+
+For Atlas language and structured capture, set `OPENAI_API_KEY`. The optional
+`NEXUS_ATLAS_MODEL` defaults to `gpt-5.6-sol`. Requests use the Responses API
+with strict structured output and `store: false`; the application validates
+the result again before showing a proposal. Model access is not required for
+the deterministic Calendar workflows.
+
+Google organizer, attendee, response, and provider-native meeting context are
+displayed, but invitation response actions are intentionally omitted until the
+complete confirmed-send flow exists. Weather, routing, attachment analysis,
+Microsoft, Apple/CalDAV, and unbuilt Nexus domain modules are likewise omitted
+until a secure, configured service or module exists.
 
 ## Verification
 
@@ -97,5 +136,9 @@ time awareness, attention and upcoming queues, typed Quick Add defaults, event
 details, rescheduling, safe recurring scope, payment/completion state, and
 reload persistence. Agenda, Week, Month, Reminder Center, Birthday Planning,
 Bill Planning, deterministic briefs, and Rescue Mode are available from the
-Calendar workspace. Other destinations intentionally show an honest
-not-built-yet state until their approved roadmap phases are implemented.
+Calendar workspace. Phase 3 adds provider-neutral sources, Google OAuth and
+manual incremental sync, sync health and conflict resolution, previewed natural
+language capture, grounded Calendar questions, deterministic Find Time and Plan
+My Day, sensitive-event controls, audit/undo, and evidence-backed insights.
+Other destinations intentionally show an honest not-built-yet state until
+their approved roadmap phases are implemented.

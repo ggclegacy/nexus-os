@@ -34,8 +34,9 @@ export async function POST(request: Request) {
     const destinationSourceId =
       typeof body.destinationSourceId === "string"
         ? body.destinationSourceId
-        : (sources.find((source) => source.isDefault && source.access === "write")
-            ?.id ?? "nexus");
+        : (sources.find(
+            (source) => source.isDefault && source.access === "write",
+          )?.id ?? "nexus");
     const destination = sources.find(
       (source) => source.id === destinationSourceId,
     );

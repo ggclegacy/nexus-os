@@ -1,4 +1,6 @@
 import { getTimePreferences } from "../../../../../db/time-repository";
+import { getCalendarPrivacySettings } from "../../../../../db/calendar-intelligence-repository";
+import { deterministicAnswer } from "../../../../../lib/calendar-intelligence/deterministic";
 import { addDays, localDateInZone } from "../../../../../lib/time/rules";
 import { ValidationError } from "../../../../../lib/domain/validation";
 import { atlasAnswer } from "../../../../../lib/server/atlas-calendar";
@@ -17,17 +19,18 @@ export async function POST(request: Request) {
         "Ask a calendar question in 500 characters or fewer.",
       );
     }
-    const preferences = await getTimePreferences();
+    const [preferences, privacy] = await Promise.all([
+      getTimePreferences(),
+      getCalendarPrivacySettings(),
+    ]);
     const today = localDateInZone(new Date(), preferences.timeZone);
     const events = await permittedAtlasEvents(
       addDays(today, -90),
       addDays(today, 365),
     );
-    const answer = await atlasAnswer(
-      body.query.trim(),
-      events,
-      preferences,
-    );
+    const answer = privacy.semanticSearch
+      ? await atlasAnswer(body.query.trim(), events, preferences)
+      : deterministicAnswer(body.query.trim(), events, preferences);
     return Response.json({ answer });
   } catch (error) {
     return jsonError(error);

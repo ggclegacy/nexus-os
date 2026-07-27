@@ -3,15 +3,9 @@ import type { CalendarEvent, CalendarEventInput } from "../time/types";
 export type CalendarProvider = "google";
 export type CalendarAccess = "read" | "write";
 export type CalendarSyncStatus =
-  | "healthy"
-  | "syncing"
-  | "attention"
-  | "disconnected";
+  "healthy" | "syncing" | "attention" | "disconnected";
 export type SyncOperationState =
-  | "confirmed"
-  | "pending"
-  | "failed"
-  | "conflict";
+  "confirmed" | "pending" | "failed" | "conflict";
 
 export interface CalendarConnection {
   id: string;
@@ -105,7 +99,7 @@ export interface CalendarCapabilities {
     model: string | null;
     reasonUnavailable: string | null;
   };
-  reconciliation: "manual-and-on-open";
+  reconciliation: "manual";
   weather: false;
   travelTime: false;
   attachments: false;

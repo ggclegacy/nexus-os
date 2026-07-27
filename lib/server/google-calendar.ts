@@ -25,11 +25,7 @@ import {
   upsertImportedCalendarEvent,
 } from "../../db/time-repository";
 import type { CalendarEventInput, TimePreferences } from "../time/types";
-import {
-  addDays,
-  localDateInZone,
-  localTimeInZone,
-} from "../time/rules";
+import { addDays, localDateInZone, localTimeInZone } from "../time/rules";
 import {
   decryptSecret,
   encryptSecret,
@@ -77,6 +73,11 @@ type GoogleCalendarEvent = {
     responseStatus?: string;
     self?: boolean;
   }>;
+  extendedProperties?: {
+    private?: {
+      nexusPreparationChecklist?: string;
+    };
+  };
   reminders?: {
     useDefault?: boolean;
     overrides?: Array<{ method?: string; minutes?: number }>;
@@ -124,6 +125,9 @@ async function eventHash(event: CalendarEventInput) {
       startTime: event.startTime,
       endTime: event.endTime,
       timeZone: event.timeZone,
+      organizer: event.organizer,
+      attendees: event.attendees,
+      preparationChecklist: event.preparationChecklist,
     }),
   );
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
@@ -132,10 +136,7 @@ async function eventHash(event: CalendarEventInput) {
   );
 }
 
-function differences(
-  local: CalendarEventInput,
-  provider: CalendarEventInput,
-) {
+function differences(local: CalendarEventInput, provider: CalendarEventInput) {
   const keys: Array<keyof CalendarEventInput> = [
     "title",
     "notes",
@@ -148,14 +149,20 @@ function differences(
     "startTime",
     "endTime",
     "timeZone",
+    "organizer",
+    "attendees",
+    "preparationChecklist",
   ];
   return keys.filter(
     (key) => JSON.stringify(local[key]) !== JSON.stringify(provider[key]),
   ) as string[];
 }
 
-function eventType(event: GoogleCalendarEvent): CalendarEventInput["eventType"] {
-  const text = `${event.summary ?? ""} ${event.description ?? ""}`.toLowerCase();
+function eventType(
+  event: GoogleCalendarEvent,
+): CalendarEventInput["eventType"] {
+  const text =
+    `${event.summary ?? ""} ${event.description ?? ""}`.toLowerCase();
   if (/\bbirthday\b/.test(text)) return "birthday";
   if (/\b(dentist|doctor|medical|clinic)\b/.test(text)) return "medical";
   if (/\b(workout|gym|training|run)\b/.test(text)) return "workout";
@@ -246,6 +253,33 @@ export function googleEventToCalendarInput(
     escalationEnabled: true,
     sensitive:
       event.visibility === "private" || event.visibility === "confidential",
+    organizer: cleanExternalText(
+      event.organizer?.displayName || event.organizer?.email,
+      320,
+    ),
+    attendees: (event.attendees ?? []).slice(0, 100).map((attendee) => ({
+      displayName: cleanExternalText(attendee.displayName, 160),
+      email: cleanExternalText(attendee.email, 320),
+      responseStatus: cleanExternalText(attendee.responseStatus, 80),
+      self: Boolean(attendee.self),
+    })),
+    preparationChecklist: (() => {
+      const value =
+        event.extendedProperties?.private?.nexusPreparationChecklist;
+      if (!value) return [];
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        return Array.isArray(parsed)
+          ? parsed
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => cleanExternalText(item, 240))
+              .filter(Boolean)
+              .slice(0, 20)
+          : [];
+      } catch {
+        return [];
+      }
+    })(),
   };
 }
 
@@ -276,6 +310,15 @@ function calendarInputToGoogleEvent(event: CalendarEventInput) {
           })),
         }
       : { useDefault: true },
+    extendedProperties: event.preparationChecklist?.length
+      ? {
+          private: {
+            nexusPreparationChecklist: JSON.stringify(
+              event.preparationChecklist.slice(0, 20),
+            ),
+          },
+        }
+      : undefined,
   };
 }
 
@@ -470,12 +513,13 @@ export async function connectGoogleCalendar(input: {
       connectionId,
       provider: "google",
       externalCalendarId: calendar.id,
-      displayName: cleanExternalText(calendar.summary, 120) || "Google Calendar",
+      displayName:
+        cleanExternalText(calendar.summary, 120) || "Google Calendar",
       access: writable ? "write" : "read",
       visible: Boolean(calendar.primary),
       includeInAvailability: Boolean(calendar.primary),
       includeInAtlas: Boolean(calendar.primary),
-      isDefault: Boolean(calendar.primary && writable),
+      isDefault: false,
     });
     if (calendar.primary) primarySourceId = sourceId;
   }
@@ -523,7 +567,8 @@ async function syncEvent(
   const mapped = googleEventToCalendarInput(event, preferences.timeZone);
   const remoteHash = await eventHash(mapped);
   const localId =
-    link?.local_event_id ?? `google:${sourceId}:${encodeURIComponent(event.id)}`;
+    link?.local_event_id ??
+    `google:${sourceId}:${encodeURIComponent(event.id)}`;
   const canonical = link ? await getCanonicalCalendarEvent(localId) : null;
   if (
     link &&
@@ -661,12 +706,13 @@ export async function syncGoogleSource(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Google sync failed.";
-    await updateSourceSyncState(sourceId, "attention", cursor, source.lastSyncedAt);
-    await updateConnectionHealth(
-      source.connectionId,
+    await updateSourceSyncState(
+      sourceId,
       "attention",
-      message,
+      cursor,
+      source.lastSyncedAt,
     );
+    await updateConnectionHealth(source.connectionId, "attention", message);
     throw error;
   }
 }
@@ -731,10 +777,7 @@ export async function pushCalendarEventUpdate(localEventId: string) {
         body: JSON.stringify(calendarInputToGoogleEvent(canonical.input)),
       },
     );
-    const mapped = googleEventToCalendarInput(
-      remote,
-      canonical.input.timeZone,
-    );
+    const mapped = googleEventToCalendarInput(remote, canonical.input.timeZone);
     await upsertExternalEventLink({
       ...link,
       sourceId: source.id,
@@ -899,7 +942,8 @@ export async function resolveGoogleSyncConflict(
   if (resolution !== "provider") {
     const canonical = await getCanonicalCalendarEvent(conflict.localEventId);
     if (!canonical) throw new Error("The local event no longer exists.");
-    resolvedEvent = resolution === "merged" && mergedEvent ? mergedEvent : canonical.input;
+    resolvedEvent =
+      resolution === "merged" && mergedEvent ? mergedEvent : canonical.input;
     const updated = await googleFetch<GoogleCalendarEvent>(
       source.connectionId,
       `/calendars/${encodeURIComponent(
@@ -913,10 +957,7 @@ export async function resolveGoogleSyncConflict(
         body: JSON.stringify(calendarInputToGoogleEvent(resolvedEvent)),
       },
     );
-    resolvedEvent = googleEventToCalendarInput(
-      updated,
-      resolvedEvent.timeZone,
-    );
+    resolvedEvent = googleEventToCalendarInput(updated, resolvedEvent.timeZone);
     currentRemote.etag = updated.etag;
   }
   const syncedAt = new Date().toISOString();

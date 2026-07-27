@@ -252,7 +252,9 @@ export async function atlasCapture(
       currency: String(result.currency ?? "USD"),
       priority: result.priority as CalendarEventInput["priority"],
       paymentStatus:
-        result.eventType === "financial" ? "unpaid" : fallback.event.paymentStatus,
+        result.eventType === "financial"
+          ? "unpaid"
+          : fallback.event.paymentStatus,
       recurrence: recurrence
         ? {
             ...recurrence,

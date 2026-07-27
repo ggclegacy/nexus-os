@@ -3,7 +3,7 @@
 **Audit date:** July 26, 2026
 
 **Roadmap status:** Phases 0–2, Command/Personal Time final hardening, and
-Calendar Phases 1–2 complete; later domain modules not started
+Calendar Phases 1–3 complete; later domain modules not started
 
 **Scope:** Local workspace `/Users/neil/Desktop/nexus-os`
 
@@ -117,6 +117,54 @@ status, Atlas entry, settings entry, skip navigation, and Quick Add.
 - Responsive week/month reflow and mobile stacking without horizontal page
   overflow
 
+### Calendar intelligence and connected sources
+
+- Provider-neutral connection, source, external-link, sync-cursor, conflict,
+  proposal, audit, privacy, and insight-preference records
+- Google OAuth authorization-code connection with signed, expiring state;
+  encrypted refresh/access credentials; bounded API retries; explicit scopes;
+  reconnect/disconnect handling; and no browser-exposed provider secrets
+- Initial bounded import plus manual incremental sync with page tokens,
+  provider sync tokens, deleted-event handling, `410` cursor recovery, source
+  visibility, availability and Atlas inclusion controls, and read/write access
+  discovery
+- Canonical Nexus events remain the source of truth for application surfaces;
+  Google records link to canonical events rather than creating a second event
+  model
+- Google all-day exclusive-end normalization, timed time-zone preservation,
+  reminders, private-event redaction/sensitivity, meeting links, provider
+  provenance, organizer/attendee/response display, read-only enforcement,
+  optimistic ETag writes, pending state, and explicit
+  Nexus/provider/merged conflict resolution
+- Calendar Intelligence workspace with connected-source health, privacy
+  controls, manual sync, conflict review, local snapshot retention choice,
+  action history, undo, and evidence-based deterministic pattern insights
+- Natural-language capture with deterministic parsing when Atlas is absent,
+  structured preview/edit/destination/overlap review, per-operation approval,
+  revalidation at apply time, partial-apply reporting, audit, and rollback/undo
+- Optional server-side Atlas interpretation through the OpenAI Responses API
+  using strict structured output, `store: false`, a configurable model, bounded
+  timeout, revalidation, prompt-injection-resistant data framing, and
+  deterministic fallback
+- Grounded Calendar questions with linkable facts, privacy/source filtering,
+  deterministic exact behavior when semantic interpretation is disabled, and
+  no mutation tools
+- Deterministic Find Time with source inclusion, hard busy blocks, transition
+  buffers, nearby context, and preview-only event creation
+- Plan My Day proposals that keep meetings, provider events, medical items,
+  bills, birthdays, and protocol items fixed while presenting individually
+  selectable moves for flexible local items
+- Optional immediate-create permission is constrained to one unambiguous,
+  conflict-free Nexus personal, meeting, workout, or reminder event and always
+  produces an undoable audit entry; medical, protocol, financial, invitation,
+  cancellation, provider, and multi-event changes always require review
+- User-authored preparation checklists are validated and persisted in canonical
+  event metadata; Google-backed checklists use private extended properties and
+  remain separate from attendee-facing descriptions
+- Honest capability gates for Google and Atlas; weather, travel-time,
+  attachments, background reconciliation, autonomous invitations, payment
+  actions, and unbuilt domain-module links are not claimed
+
 ### Shared implementation
 
 - `components/shell`: responsive application shell and navigation
@@ -160,9 +208,13 @@ deterministic in-app records only; there is no background/push provider.
 Non-local requests require environment-configured single-owner credentials at
 the application proxy before API or page access. Cross-site mutations are
 rejected and security headers are added. This is suitable for the one-owner
-release, not multi-user identity, per-record sharing, or delegated access. No
-external integrations, telemetry, Atlas provider, health/financial record, or
-Vault content is connected.
+release, not multi-user identity, per-record sharing, or delegated access.
+Google and OpenAI are optional server-configured integrations; without their
+credentials, Nexus remains fully usable and exposes no dead connection action.
+Provider credentials are AES-GCM encrypted at rest using an operator-supplied
+32-byte key. Calendar records marked sensitive are excluded from Atlas by
+default, and every external source has an independent Atlas inclusion control.
+No telemetry, health/financial record system, or Vault content is connected.
 
 ## 4. Design and accessibility
 
@@ -212,6 +264,18 @@ The additive Calendar Phase 2 migration:
 - extends `time_preferences` with default view/duration/snooze, brief times,
   transition and overload thresholds, and bounded escalation controls
 - contains no drop, delete, or canonical event/reminder rewrite
+
+The additive Calendar Phase 3 migration:
+
+- creates `calendar_connections`, `calendar_sources`, and
+  `external_event_links` for provider-neutral connection and canonical-event
+  mapping
+- creates `calendar_sync_conflicts` for preserved local/provider versions and
+  explicit resolution
+- creates `calendar_privacy_settings`, `calendar_proposals`, `calendar_audit`,
+  and `calendar_insight_preferences`
+- does not alter, replace, drop, or delete any canonical event, priority,
+  routine, reminder, preference, or occurrence data
 
 The repository initializes the same schema defensively in local development.
 Drizzle schema changes must be followed by `npm run db:generate`.
@@ -287,6 +351,57 @@ The full development dependency audit still reports the upstream
 major is API-incompatible with that toolchain, so it is not force-overridden.
 This affects local lint tooling rather than the production dependency graph.
 
+Latest Calendar Phase 3 verification on July 26, 2026 produced:
+
+- Formatting, strict type checking, lint, and whitespace validation: passed
+- Vitest: 14 files and 75 tests passed
+- Accessibility: 5 axe checks passed with no automated violations
+- End-to-end component coverage: 4 files and 22 workflows passed, including
+  preview-before-apply, ambiguity disclosure, safe immediate creation, undo
+  visibility, OAuth cancellation return, and unavailable-provider behavior
+- Phase 3 domain/security coverage: relative and ISO date capture, birthday
+  defaults, buffered availability, grounded facts, deterministic Atlas
+  fallback, Google all-day/private/organizer/attendee/checklist normalization,
+  least-privilege OAuth scope construction, state tamper/expiry/open-redirect
+  rejection, and connector-secret validation passed
+- Migration safety: all eight Phase 3 integration/intelligence tables are
+  additive and canonical event, priority, routine, reminder, preference, and
+  occurrence stores are untouched
+- Vinext/Worker and Vercel/Next production builds: passed
+- Rendered Worker and Vercel output: Command, Calendar, and the honest unbuilt
+  Atlas destination passed on both targets
+- Production dependency audit: zero known vulnerabilities
+- Live Google and OpenAI account calls were not performed because operator
+  credentials were not present; their UI and server capabilities remain
+  honestly gated
+- Subjective desktop, tablet, mobile, provider-return, conflict, and
+  partial-failure visual acceptance remains the user-owned manual review step
+
+Latest Command + Calendar aesthetic-elevation verification on July 26, 2026
+produced:
+
+- Shared obsidian, graphite, emerald, gold, border, elevation, focus, and
+  160–240 ms motion tokens now govern both operational surfaces
+- Command hierarchy is Atlas briefing, Today Mission, Now/Next/Following time
+  awareness, chronological timeline, supporting status, and quick capture
+- The protected Nexus emblem remains unchanged and is presented inside a
+  composited 7.2-second emerald breathing field with a rare restrained gold
+  edge catch; reduced-motion preferences stop the animation
+- Calendar Today, Agenda, Week, and Month use the same three-level surface
+  system; event type remains identifiable through text labels and icons in
+  addition to restrained semantic edges
+- Current, next, overdue, selected, obligation, completed, loading, empty, and
+  error states retain their existing data-backed behaviors and receive
+  differentiated visual hierarchy
+- Responsive rules preserve the Command priority order and convert time
+  awareness into a vertical mobile sequence without shrinking controls
+- A generic, non-personal Command + Calendar social preview is wired through
+  Next metadata; the protected emblem was not reinterpreted in the artwork
+- Formatting, strict type checking, lint, all 75 Vitest checks, both production
+  builds, and rendered Command/Calendar smoke tests on Worker and Vercel passed
+- Subjective visual acceptance across desktop, tablet, and mobile remains the
+  user-owned manual review step required by the project standards
+
 ## 7. Roadmap status
 
 | Order | Prompt                                        | Status      | Note                            |
@@ -297,7 +412,7 @@ This affects local lint tooling rather than the production dependency graph.
 | 3     | Protocol                                      | Not started | Prepared route only             |
 | 4     | Fitness                                       | Not started | Prepared route only             |
 | 5     | Sleep and Recovery                            | Not started | Prepared route only             |
-| 6     | Atlas                                         | Not started | Explicitly unavailable          |
+| 6     | Atlas domain module                           | Not started | Calendar-local integration only |
 | 7     | Nutrition and Hydration                       | Not started | Prepared route only             |
 | 8     | Personal Finance                              | Not started | Prepared route only             |
 | 9     | Mindset and Life                              | Not started | Prepared routes only            |
@@ -310,6 +425,13 @@ Phase 1–2 vertical slice. It does not mark the Protocol domain module or the
 later system-wide hardening roadmap item complete. Extension points remain the
 typed repository contracts, shared Command composition, API adapters, and
 prepared honest routes for later modules.
+
+The separate Calendar Phase 3 connected-intelligence pass is complete in the
+local workspace. Google and OpenAI live-provider execution remains
+configuration-gated and cannot be claimed as account-tested without operator
+credentials. Sync reconciliation is manual because this repository has no
+durable background-job foundation. The standalone Atlas domain module remains
+unbuilt.
 
 No commit, push, pull request, deployment, publication, or external account
 action was performed.

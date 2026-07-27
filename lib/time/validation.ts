@@ -93,6 +93,47 @@ function optionalBoolean(value: unknown, label: string, fallback: boolean) {
   return value;
 }
 
+function attendees(
+  value: unknown,
+): NonNullable<CalendarEventInput["attendees"]> {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new ValidationError(
+      "Attendees must contain no more than 100 people.",
+    );
+  }
+  return value.map((entry) => {
+    const attendee = record(entry);
+    return {
+      displayName: optionalText(
+        attendee.displayName,
+        "Attendee display name",
+        160,
+      ),
+      email: optionalText(attendee.email, "Attendee email", 320),
+      responseStatus: optionalText(
+        attendee.responseStatus,
+        "Attendee response",
+        80,
+      ),
+      self: optionalBoolean(attendee.self, "Attendee self marker", false),
+    };
+  });
+}
+
+function preparationChecklist(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 20) {
+    throw new ValidationError(
+      "Preparation checklist must contain no more than 20 items.",
+    );
+  }
+  const items = value.map((item) =>
+    requiredText(item, "Preparation item", 240),
+  );
+  return [...new Set(items)];
+}
+
 export function parseDateKey(value: unknown, label: string) {
   return date(value, label);
 }
@@ -371,6 +412,9 @@ export function parseCalendarEvent(value: unknown): CalendarEventInput {
       true,
     ),
     sensitive: optionalBoolean(input.sensitive, "Sensitive event", false),
+    organizer: optionalText(input.organizer, "Organizer", 320),
+    attendees: attendees(input.attendees),
+    preparationChecklist: preparationChecklist(input.preparationChecklist),
   };
 }
 
