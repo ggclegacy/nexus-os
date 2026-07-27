@@ -1,61 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { authorizePrivateRequest } from "../lib/server/access";
+import { authorizeRequest } from "../lib/server/access";
 import { readJson } from "../lib/server/http";
 
 function request(
   url: string,
-  init: { authorization?: string; method?: string; origin?: string } = {},
+  init: {
+    fetchSite?: string;
+    method?: string;
+    origin?: string;
+  } = {},
 ) {
   return new Request(url, {
     method: init.method ?? "GET",
     headers: {
-      ...(init.authorization ? { authorization: init.authorization } : {}),
+      ...(init.fetchSite ? { "sec-fetch-site": init.fetchSite } : {}),
       ...(init.origin ? { origin: init.origin } : {}),
     },
   });
 }
 
-describe("private access boundary", () => {
-  const environment = {
-    NEXUS_ACCESS_USERNAME: "owner",
-    NEXUS_ACCESS_PASSWORD: "correct horse battery staple",
-  };
-
-  it("keeps localhost usable without weakening hosted access", () => {
-    expect(
-      authorizePrivateRequest(request("http://localhost:3000/"), {}),
-    ).toEqual({ state: "allowed" });
-    expect(
-      authorizePrivateRequest(request("https://nexus.example/"), {}),
-    ).toEqual({ state: "configuration-required" });
+describe("request access boundary", () => {
+  it("allows the public application to load on local and hosted origins", () => {
+    expect(authorizeRequest(request("http://localhost:3000/"))).toEqual({
+      state: "allowed",
+    });
+    expect(authorizeRequest(request("https://nexus.example/"))).toEqual({
+      state: "allowed",
+    });
   });
 
-  it("accepts valid hosted credentials and rejects invalid credentials", () => {
-    const valid = `Basic ${btoa("owner:correct horse battery staple")}`;
-    const invalid = `Basic ${btoa("owner:incorrect")}`;
+  it("allows same-origin hosted mutations", () => {
     expect(
-      authorizePrivateRequest(
-        request("https://nexus.example/", { authorization: valid }),
-        environment,
+      authorizeRequest(
+        request("https://nexus.example/api/priorities", {
+          method: "POST",
+          origin: "https://nexus.example",
+        }),
       ),
     ).toEqual({ state: "allowed" });
-    expect(
-      authorizePrivateRequest(
-        request("https://nexus.example/", { authorization: invalid }),
-        environment,
-      ),
-    ).toEqual({ state: "unauthorized" });
   });
 
   it("rejects cross-origin hosted mutations", () => {
     expect(
-      authorizePrivateRequest(
+      authorizeRequest(
         request("https://nexus.example/api/priorities", {
-          authorization: `Basic ${btoa("owner:correct horse battery staple")}`,
           method: "POST",
           origin: "https://attacker.example",
         }),
-        environment,
+      ),
+    ).toEqual({ state: "forbidden" });
+    expect(
+      authorizeRequest(
+        request("https://nexus.example/api/priorities", {
+          fetchSite: "cross-site",
+          method: "POST",
+        }),
       ),
     ).toEqual({ state: "forbidden" });
   });

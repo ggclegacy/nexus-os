@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { authorizePrivateRequest } from "./lib/server/access";
+import { authorizeRequest } from "./lib/server/access";
 
 const SECURITY_HEADERS = {
   "Content-Security-Policy":
@@ -22,45 +22,24 @@ function secure(response: NextResponse) {
 }
 
 export function proxy(request: NextRequest) {
-  const decision = authorizePrivateRequest(request, {
-    NEXUS_ACCESS_USERNAME: process.env.NEXUS_ACCESS_USERNAME,
-    NEXUS_ACCESS_PASSWORD: process.env.NEXUS_ACCESS_PASSWORD,
-  });
+  const decision = authorizeRequest(request);
   if (decision.state === "allowed") {
     return secure(NextResponse.next());
   }
 
   const apiRequest = request.nextUrl.pathname.startsWith("/api/");
-  const message =
-    decision.state === "configuration-required"
-      ? "Private access is not configured."
-      : decision.state === "forbidden"
-        ? "This request is not allowed."
-        : "Authentication is required.";
+  const message = "This request is not allowed.";
   const response = apiRequest
     ? NextResponse.json(
         { error: message },
         {
-          status:
-            decision.state === "configuration-required"
-              ? 503
-              : decision.state === "forbidden"
-                ? 403
-                : 401,
+          status: 403,
         },
       )
     : new NextResponse(message, {
-        status:
-          decision.state === "configuration-required"
-            ? 503
-            : decision.state === "forbidden"
-              ? 403
-              : 401,
+        status: 403,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
-  if (decision.state === "unauthorized") {
-    response.headers.set("WWW-Authenticate", 'Basic realm="Nexus OS"');
-  }
   return secure(response);
 }
 
